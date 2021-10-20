@@ -136,6 +136,7 @@ static FORCE_INLINE void LZ4_writeLE16(void *memPtr, U16 value)
 {
 	return put_unaligned_le16(value, memPtr);
 }
+<<<<<<< HEAD
 
 /*
  * LZ4 relies on memcpy with a constant size being inlined. In freestanding
@@ -148,6 +149,9 @@ static FORCE_INLINE void LZ4_writeLE16(void *memPtr, U16 value)
 #define LZ4_memcpy(dst, src, size) __builtin_memcpy(dst, src, size)
 #define LZ4_memmove(dst, src, size) __builtin_memmove(dst, src, size)
 
+=======
+#define LZ4_memmove(dst, src, size) __builtin_memmove(dst, src, size)
+>>>>>>> 3098aaa61 (提交本地项目到仓库)
 static FORCE_INLINE void LZ4_copy8(void *dst, const void *src)
 {
 #if LZ4_ARCH64
