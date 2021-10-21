@@ -3014,7 +3014,7 @@ result:
 					if (wbc->sync_mode == WB_SYNC_ALL) {
 						cond_resched();
 						congestion_wait(BLK_RW_ASYNC,
-								HZ/50);
+								HZ/10);
 						goto retry_write;
 					}
 					goto next;
