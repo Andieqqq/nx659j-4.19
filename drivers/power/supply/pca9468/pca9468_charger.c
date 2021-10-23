@@ -319,7 +319,7 @@ static int adc_gain[16] = { 0, 1, 2, 3, 4, 5, 6, 7, -8, -7, -6, -5, -4, -3, -2, 
 
 /* Maximum TA voltage threshold */
 #define PCA9468_TA_MAX_VOL		9800000 // 9800000uV
-/* Maximum TA current threshold */
+/* Maximum TA  threshold */
 #define PCA9468_TA_MAX_CUR		2500000	// 2500000uA
 /* Minimum TA current threshold */
 #define PCA9468_TA_MIN_CUR		1000000	// 1000000uA - PPS minimum current
