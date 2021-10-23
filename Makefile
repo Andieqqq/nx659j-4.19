@@ -852,13 +852,18 @@ LDFLAGS_vmlinux += --gc-sections
 endif
 
 ifdef CONFIG_LTO_CLANG
-ifdef CONFIG_THINLTO
-lto-clang-flags	:= -flto=thin
-KBUILD_LDFLAGS	+= --thinlto-cache-dir=.thinlto-cache
+ifdef CONFIG_LTO_CLANG_THIN
+CC_FLAGS_LTO	+= -flto=thin -fsplit-lto-unit
+KBUILD_LDFLAGS	+= --thinlto-cache-dir=$(extmod-prefix).thinlto-cache
 else
-lto-clang-flags	:= -flto
+CC_FLAGS_LTO	+= -flto
+CC_FLAGS_LTO	+= -fvisibility=hidden
 endif
-lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
+
+ifdef CONFIG_LTO
+KBUILD_CFLAGS	+= $(CC_FLAGS_LTO)
+export CC_FLAGS_LTO
+endif
 
 # Limit inlining across translation units to reduce binary size
 LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
@@ -1453,7 +1458,7 @@ MRPROPER_FILES += .config .config.old .version \
 		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS \
 		  signing_key.pem signing_key.priv signing_key.x509	\
 		  x509.genkey extra_certificates signing_key.x509.keyid	\
-		  signing_key.x509.signer vmlinux-gdb.py
+		  signing_key.x509.signer vmlinux-gdb.py .thinlto-cache
 
 # clean - Delete most, but leave enough to build external modules
 #
@@ -1687,7 +1692,7 @@ $(clean-dirs):
 	$(Q)$(MAKE) $(clean)=$(patsubst _clean_%,%,$@)
 
 clean:	rm-dirs := $(MODVERDIR)
-clean: rm-files := $(KBUILD_EXTMOD)/Module.symvers
+clean: rm-files := $(KBUILD_EXTMOD)/Module.symvers $(KBUILD_EXTMOD)/.thinlto-cache
 
 PHONY += help
 help:
