@@ -242,6 +242,7 @@ cleanup()
 {
 	rm -f .tmp_System.map
 	rm -f .tmp_kallsyms*
+	rm -f .tmp_symversions
 	rm -f .tmp_lto.lds
 	rm -f .tmp_vmlinux*
 	rm -f built-in.a
