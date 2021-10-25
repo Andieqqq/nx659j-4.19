@@ -4,20 +4,7 @@ PATCHLEVEL = 19
 SUBLEVEL = 113
 EXTRAVERSION =
 NAME = "People's Front"
-KBUILD_CFLAGS   += -Wno-error
-ifdef CONFIG_LTO
-LTO_CFLAGS    := -flto -flto=jobserver -fno-fat-lto-objects \
-                 -fuse-linker-plugin -fwhole-program
-KBUILD_CFLAGS += $(LTO_CFLAGS) --param=max-inline-insns-auto=1000
-LTO_LDFLAGS   := $(LTO_CFLAGS) -Wno-lto-type-mismatch -Wno-psabi \
-                 -Wno-stringop-overflow -flinker-output=nolto-rel
-endif
-KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, psabi)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, restrict)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, stringop-overflow)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, zero-length-bounds)
+#KBUILD_CFLAGS   += -Wno-error
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
 # More info can be located in ./README
@@ -852,18 +839,14 @@ LDFLAGS_vmlinux += --gc-sections
 endif
 
 ifdef CONFIG_LTO_CLANG
-ifdef CONFIG_LTO_CLANG_THIN
-CC_FLAGS_LTO	+= -flto=thin -fsplit-lto-unit
-KBUILD_LDFLAGS	+= --thinlto-cache-dir=$(extmod-prefix).thinlto-cache
+ifdef CONFIG_THINLTO
+lto-clang-flags	:= -flto=thin
+KBUILD_LDFLAGS	+= --thinlto-cache-dir=.thinlto-cache
 else
-CC_FLAGS_LTO	+= -flto
-CC_FLAGS_LTO	+= -fvisibility=hidden
+lto-clang-flags	:= -flto
 endif
+lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
 
-ifdef CONFIG_LTO
-KBUILD_CFLAGS	+= $(CC_FLAGS_LTO)
-export CC_FLAGS_LTO
-endif
 
 # Limit inlining across translation units to reduce binary size
 LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
