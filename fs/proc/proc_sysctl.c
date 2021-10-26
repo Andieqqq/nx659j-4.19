@@ -1653,29 +1653,41 @@ void unregister_sysctl_table(struct ctl_table_header * header)
 {
 	int nr_subheaders;
 	might_sleep();
-
+    pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	if (header == NULL)
 		return;
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	nr_subheaders = count_subheaders(header->ctl_table_arg);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	if (unlikely(nr_subheaders > 1)) {
 		struct ctl_table_header **subheaders;
 		int i;
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		subheaders = (struct ctl_table_header **)(header + 1);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		for (i = nr_subheaders -1; i >= 0; i--) {
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 			struct ctl_table_header *subh = subheaders[i];
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 			struct ctl_table *table = subh->ctl_table_arg;
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 			unregister_sysctl_table(subh);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 			kfree(table);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		}
 		kfree(header);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		return;
 	}
 
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	spin_lock(&sysctl_lock);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	drop_sysctl_table(header);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	spin_unlock(&sysctl_lock);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 }
 EXPORT_SYMBOL(unregister_sysctl_table);
 

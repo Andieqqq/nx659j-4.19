@@ -32,9 +32,6 @@ static void inherit_derived_state(struct inode *parent, struct inode *child)
 	ci->data->under_android = pi->data->under_android;
 	ci->data->under_cache = pi->data->under_cache;
 	ci->data->under_obb = pi->data->under_obb;
-	//nubia add for nubia-pass-through-dir
-	ci->data->under_nubia_pass_through = pi->data->under_nubia_pass_through;
-	//nubia add end
 }
 
 /* helper function for derived state */
@@ -49,9 +46,6 @@ void setup_derived_state(struct inode *inode, perm_t perm, userid_t userid,
 	info->data->under_android = false;
 	info->data->under_cache = false;
 	info->data->under_obb = false;
-	//nubia add for nubia-pass-through-dir
-	info->data->under_nubia_pass_through = false;
-	//nubia add end
 }
 
 /* While renaming, there is a point where we want the path from dentry,
@@ -72,10 +66,6 @@ void get_derived_permission_new(struct dentry *parent, struct dentry *dentry,
 	struct qstr q_obb = QSTR_LITERAL("obb");
 	struct qstr q_media = QSTR_LITERAL("media");
 	struct qstr q_cache = QSTR_LITERAL("cache");
-	//nubia add for nubia-pass-through-dir
-	struct qstr q_nubialog = QSTR_LITERAL("nubialog");
-	struct qstr q_tencent = QSTR_LITERAL("tencent");
-	//nubia add end
 
 	/* By default, each inode inherits from its parent.
 	 * the properties are maintained on its private fields
@@ -113,13 +103,7 @@ void get_derived_permission_new(struct dentry *parent, struct dentry *dentry,
 			/* App-specific directories inside; let anyone traverse */
 			info->data->perm = PERM_ANDROID;
 			info->data->under_android = true;
-		} //nubia add for nubia-pass-through-dir
-		else if(qstr_case_eq(name, &q_nubialog) || qstr_case_eq(name, &q_tencent)) {
-			info->data->perm = PERM_NUBIA;
-	        info->data->under_nubia_pass_through = true;
-	    }
-		//nubia add end
-		else {
+		} else {
 			set_top(info, parent_info);
 		}
 		break;
@@ -142,11 +126,6 @@ void get_derived_permission_new(struct dentry *parent, struct dentry *dentry,
 			set_top(info, parent_info);
 		}
 		break;
-	//nubia add for nubia-pass-through-dir
-	case PERM_NUBIA:
-		set_top(info, parent_info);
-		break;
-	//nubia add end
 	case PERM_ANDROID_OBB:
 	case PERM_ANDROID_DATA:
 	case PERM_ANDROID_MEDIA:

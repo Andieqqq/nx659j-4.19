@@ -232,7 +232,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 			spin_unlock(&fc->lock);
 		}
 		kfree(forget);
-		if (ret == -ENOMEM)
+		if ((ret == -ENOMEM) || (ret == -EINTR))
 			goto out;
 		if (ret || fuse_invalid_attr(&outarg.attr) ||
 		    (outarg.attr.mode ^ inode->i_mode) & S_IFMT)
@@ -263,50 +263,6 @@ invalid:
 	goto out;
 }
 
-/*
- * Get the canonical path. Since we must translate to a path, this must be done
- * in the context of the userspace daemon, however, the userspace daemon cannot
- * look up paths on its own. Instead, we handle the lookup as a special case
- * inside of the write request.
- */
-static void fuse_dentry_canonical_path(const struct path *path, struct path *canonical_path) {
-	struct inode *inode = path->dentry->d_inode;
-	struct fuse_conn *fc = get_fuse_conn(inode);
-	struct fuse_req *req;
-	int err;
-	char *path_name;
-
-	req = fuse_get_req(fc, 1);
-	err = PTR_ERR(req);
-	if (IS_ERR(req))
-		goto default_path;
-
-	path_name = (char*)__get_free_page(GFP_KERNEL);
-	if (!path_name) {
-		fuse_put_request(fc, req);
-		goto default_path;
-	}
-
-	req->in.h.opcode = FUSE_CANONICAL_PATH;
-	req->in.h.nodeid = get_node_id(inode);
-	req->in.numargs = 0;
-	req->out.numargs = 1;
-	req->out.args[0].size = PATH_MAX;
-	req->out.args[0].value = path_name;
-	req->canonical_path = canonical_path;
-	req->out.argvar = 1;
-	fuse_request_send(fc, req);
-	err = req->out.h.error;
-	fuse_put_request(fc, req);
-	free_page((unsigned long)path_name);
-	if (!err)
-		return;
-default_path:
-	canonical_path->dentry = path->dentry;
-	canonical_path->mnt = path->mnt;
-	path_get(canonical_path);
-}
-
 static int invalid_nodeid(u64 nodeid)
 {
 	return !nodeid || nodeid == FUSE_ROOT_ID;
@@ -323,6 +279,44 @@ static void fuse_dentry_release(struct dentry *dentry)
 	union fuse_dentry *fd = dentry->d_fsdata;
 
 	kfree_rcu(fd, rcu);
+}
+
+/*
+ * Get the canonical path. Since we must translate to a path, this must be done
+ * in the context of the userspace daemon, however, the userspace daemon cannot
+ * look up paths on its own. Instead, we handle the lookup as a special case
+ * inside of the write request.
+ */
+static void fuse_dentry_canonical_path(const struct path *path,
+				       struct path *canonical_path)
+{
+	struct inode *inode = d_inode(path->dentry);
+	struct fuse_conn *fc = get_fuse_conn(inode);
+	FUSE_ARGS(args);
+	char *path_name;
+	int err;
+
+	path_name = (char *)__get_free_page(GFP_KERNEL);
+	if (!path_name)
+		goto default_path;
+
+	args.in.h.opcode = FUSE_CANONICAL_PATH;
+	args.in.h.nodeid = get_node_id(inode);
+	args.in.numargs = 0;
+	args.out.numargs = 1;
+	args.out.args[0].size = PATH_MAX;
+	args.out.args[0].value = path_name;
+	args.out.argvar = 1;
+	args.out.canonical_path = canonical_path;
+
+	err = fuse_simple_request(fc, &args);
+	free_page((unsigned long)path_name);
+	if (err > 0)
+		return;
+default_path:
+	canonical_path->dentry = path->dentry;
+	canonical_path->mnt = path->mnt;
+	path_get(canonical_path);
 }
 
 const struct dentry_operations fuse_dentry_operations = {
@@ -499,7 +493,6 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	args.out.args[0].value = &outentry;
 	args.out.args[1].size = sizeof(outopen);
 	args.out.args[1].value = &outopen;
-    args.passthrough_filp = NULL;
 	err = fuse_simple_request(fc, &args);
 	if (err)
 		goto out_free_ff;
@@ -512,7 +505,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	ff->fh = outopen.fh;
 	ff->nodeid = outentry.nodeid;
 	ff->open_flags = outopen.open_flags;
-    ff->passthrough_filp = args.passthrough_filp;
+	fuse_passthrough_setup(fc, ff, &outopen);
 	inode = fuse_iget(dir->i_sb, outentry.nodeid, outentry.generation,
 			  &outentry.attr, entry_attr_timeout(&outentry), 0);
 	if (!inode) {
@@ -1002,7 +995,6 @@ static int fuse_update_get_attr(struct inode *inode, struct file *file,
 		sync = false;
 	else
 		sync = time_before64(fi->i_time, get_jiffies_64());
-
 
 	if (sync) {
 		forget_all_cached_acls(inode);

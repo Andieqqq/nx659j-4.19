@@ -7,6 +7,7 @@
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/err.h>
+#include <drm/drm_notifier_mi.h>
 
 #include "msm_drv.h"
 #include "sde_connector.h"
@@ -21,9 +22,6 @@
 #include "sde_dbg.h"
 #include "dsi_parser.h"
 
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-#include "nubia_disp_preference.h"
-#endif
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
 
@@ -36,32 +34,7 @@
 #define DSI_CLOCK_BITRATE_RADIX 10
 #define MAX_TE_SOURCE_ID  2
 
-u8 osc_value_90 = 0;
-u8 osc_value_120 = 0;
-int read_osc_count = 0;
-extern int fps_store;
-u8 gamma1[144] = {0};/***gamma C7 for 120Hz,address:000100****/
-u8 gamma2[144] = {0};/***gamma C8 for 120Hz,address:000200****/
-u8 gamma3[144] = {0};/***gamma C9 for 120Hz,address:000300****/
-u8 gamma4[144] = {0};/***gamma CA for 120Hz,address:000400****/
-u8 gamma5[144] = {0};/***gamma CB for 120Hz,address:000500****/
-u8 gamma6[144] = {0};/***gamma C7 for 90Hz**/
-u8 gamma7[144] = {0};/***gamma C8 for 90Hz**/
-u8 gamma8[144] = {0};/***gamma C9 for 90Hz**/
-u8 gamma9[144] = {0};/***gamma CA for 90Hz**/
-u8 gamma10[144] = {0};/***gamma CB for 90Hz**/
-
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-/**
-** 659 has two panls, one for 66455, 66455 used for NX629J
-** 66451 for NX659, add flag to distinguish 66455 and 66451
-**/
-bool is_66451_panel = 0;
-bool need_change_osc_gamma = 0;
-u32 last_fps = 90;
-extern struct nubia_disp_type nubia_disp_val;
-
-#endif
+DEFINE_MUTEX(dsi_display_clk_mutex);
 
 static char dsi_display_primary[MAX_CMDLINE_PARAM_LEN];
 static char dsi_display_secondary[MAX_CMDLINE_PARAM_LEN];
@@ -74,11 +47,9 @@ static const struct of_device_id dsi_display_dt_match[] = {
 	{.compatible = "qcom,dsi-display"},
 	{}
 };
-#ifdef CONFIG_NUBIA_DEBUG_LCD_REG
-int dsi_display_read_osc_value(struct dsi_panel *panel);
-int dsi_display_read_gamma_value(struct dsi_panel *panel);
 
-#endif
+static unsigned int cur_refresh_rate = 60;
+
 static void dsi_display_mask_ctrl_error_interrupts(struct dsi_display *display,
 			u32 mask, bool enable)
 {
@@ -280,7 +251,7 @@ error:
 	return rc;
 }
 
-static int dsi_display_cmd_engine_enable(struct dsi_display *display)
+int dsi_display_cmd_engine_enable(struct dsi_display *display)
 {
 	int rc = 0;
 	int i;
@@ -324,7 +295,7 @@ done:
 	return rc;
 }
 
-static int dsi_display_cmd_engine_disable(struct dsi_display *display)
+int dsi_display_cmd_engine_disable(struct dsi_display *display)
 {
 	int rc = 0;
 	int i;
@@ -510,7 +481,7 @@ error:
 }
 
 /* Allocate memory for cmd dma tx buffer */
-static int dsi_host_alloc_cmd_tx_buffer(struct dsi_display *display)
+int dsi_host_alloc_cmd_tx_buffer(struct dsi_display *display)
 {
 	int rc = 0, cnt = 0;
 	struct dsi_display_ctrl *display_ctrl;
@@ -606,11 +577,8 @@ static bool dsi_display_validate_reg_read(struct dsi_panel *panel)
 		for (i = 0; i < len; ++i) {
 			if (config->return_buf[i] !=
 				config->status_value[group + i]) {
-				//nubia add more info for esd
-				DRM_ERROR("mismatch: return:0x%02x, expected:0x%02x, reg:0x%02x\n",
-						config->return_buf[i],
-						config->status_value[group + i],
-						*(int*)config->status_cmd.cmds[i].msg.tx_buf);
+				DRM_ERROR("mismatch: 0x%x\n",
+						config->return_buf[i]);
 				break;
 			}
 		}
@@ -622,60 +590,6 @@ static bool dsi_display_validate_reg_read(struct dsi_panel *panel)
 
 	return false;
 }
-
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-
-static int dsi_display_read_current_demura(struct dsi_panel *panel)
-{
-	int rc = 0;
-	u8 cmd1[1] = {0x00};
-	u8 *rx_buf = NULL;
-	int i = 0;
-	struct mipi_dsi_device *dsi;
-
-	if (!panel) {
-		DSI_ERR("Invalid params\n");
-		return -EINVAL;
-	}
-	rx_buf = (u8*)kzalloc(50, GFP_KERNEL);
-	if (ZERO_OR_NULL_PTR(rx_buf))
-		return -ENOMEM;
-
-	dsi = &panel->mipi_device;
-
-	rc = mipi_dsi_dcs_write(dsi, 0xB0, cmd1, sizeof(cmd1));
-	rc = dsi_panel_read_data(dsi, 0xDF, rx_buf, 0x2B);
-	if (!rc) {
-		DSI_ERR("dsi panel read demura data failed rc=%d\n", rc);
-		goto error;
-	}
-	printk("%s: ", __func__);
-	for(i=0; i< 43; i++){
-		printk("%x ", rx_buf[i]);
-	}
-error:
-	kfree(rx_buf);
-	rx_buf = NULL;
-	return rc;
-}
-
-static bool dsi_display_demura_cheksum(struct dsi_panel *panel)
-{
-	struct drm_panel_esd_config *config;
-
-	if (!panel)
-		return false;
-
-	config = &(panel->esd_config);
-
-	if (config->demura_checksum == 0)
-		return true;
-	else{
-			dsi_display_read_current_demura(panel);
-			return false;
-	}
-}
-#endif
 
 static void dsi_display_parse_te_data(struct dsi_display *display)
 {
@@ -764,41 +678,6 @@ static int dsi_display_read_status(struct dsi_display_ctrl *ctrl,
 	return rc;
 }
 
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-int dsi_display_read_demura(struct dsi_panel *panel)
-{
-	int rc = 0;
-	int count = DEMURA_CHECK_NUM;
-	u8 cmd1[1] = {0x00};
-	u8 *rx_buf = NULL;
-	struct mipi_dsi_device *dsi;
-
-	if (!panel) {
-		DSI_ERR("Invalid params\n");
-		return -EINVAL;
-	}
-	rx_buf = (u8*)kzalloc(10, GFP_KERNEL);
-	if (ZERO_OR_NULL_PTR(rx_buf))
-		return -ENOMEM;
-
-	dsi = &panel->mipi_device;
-
-	rc = mipi_dsi_dcs_write(dsi, 0xB0, cmd1, sizeof(cmd1));
-	rc = dsi_panel_read_data(dsi, 0xE7, rx_buf, count);
-	if (!rc) {
-		DSI_ERR("dsi panel read demura data failed rc=%d\n", rc);
-		goto error;
-	}
-
-	panel->esd_config.demura_checksum = rx_buf[0] & 0x03;
-	printk("panel->esd_config.demura_checksum = %d , rx_buf[0]=%d \n",panel->esd_config.demura_checksum, rx_buf[0]);
-error:
-	kfree(rx_buf);
-	rx_buf = NULL;
-	return rc;
-}
-#endif
-
 static int dsi_display_validate_status(struct dsi_display_ctrl *ctrl,
 		struct dsi_panel *panel)
 {
@@ -818,23 +697,6 @@ static int dsi_display_validate_status(struct dsi_display_ctrl *ctrl,
 			goto exit;
 		}
 	}
-
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-	rc = dsi_display_read_demura(panel);
-	if (rc <=0) {
-		goto exit;
-	} else {
-		/*
-		 * panel demura read successfully.
-		 * check for validity of the data read back.
-		 */
-		rc = dsi_display_demura_cheksum(panel);
-		if (!rc) {
-			rc = -EINVAL;
-			goto exit;
-		}
-	}
-#endif
 
 exit:
 	return rc;
@@ -1188,31 +1050,67 @@ int dsi_display_set_power(struct drm_connector *connector,
 		int power_mode, void *disp)
 {
 	struct dsi_display *display = disp;
+	struct dsi_panel_mi_cfg *mi_cfg;
 	int rc = 0;
+	struct mi_drm_notifier notify_data;
+	const char *sde_power_mode_str[] = {
+		[SDE_MODE_DPMS_ON] = "SDE_MODE_DPMS_ON",
+		[SDE_MODE_DPMS_LP1] = "SDE_MODE_DPMS_LP1",
+		[SDE_MODE_DPMS_LP2] = "SDE_MODE_DPMS_LP2",
+		[SDE_MODE_DPMS_STANDBY] = "SDE_MODE_DPMS_STANDBY",
+		[SDE_MODE_DPMS_SUSPEND] = "SDE_MODE_DPMS_SUSPEND",
+		[SDE_MODE_DPMS_OFF] = "SDE_MODE_DPMS_OFF",
+	};
 
 	if (!display || !display->panel) {
 		DSI_ERR("invalid display/panel\n");
 		return -EINVAL;
 	}
 
+	mi_cfg = &display->panel->mi_cfg;
+
+	notify_data.data = &power_mode;
+	notify_data.id = MSM_DRM_PRIMARY_DISPLAY;
+
+	DSI_INFO("power_mode = %s\n", sde_power_mode_str[power_mode]);
+
 	switch (power_mode) {
 	case SDE_MODE_DPMS_LP1:
+		mi_cfg->in_aod = true;
+		mi_drm_notifier_call_chain(MI_DRM_EARLY_EVENT_BLANK, &notify_data);
 		rc = dsi_panel_set_lp1(display->panel);
+		if (mi_cfg->unset_doze_brightness)
+			dsi_panel_set_doze_brightness(display->panel,
+				mi_cfg->unset_doze_brightness, true);
+		mi_drm_notifier_call_chain(MI_DRM_EVENT_BLANK, &notify_data);
 		break;
 	case SDE_MODE_DPMS_LP2:
+		mi_cfg->in_aod = true;
+		mi_drm_notifier_call_chain(MI_DRM_EARLY_EVENT_BLANK, &notify_data);
 		rc = dsi_panel_set_lp2(display->panel);
+		if (mi_cfg->last_bl_level>70)
+			mi_cfg->unset_doze_brightness=DOZE_BRIGHTNESS_HBM;
+		else
+			mi_cfg->unset_doze_brightness=DOZE_BRIGHTNESS_LBM;
+		dsi_panel_set_doze_brightness(display->panel,
+				mi_cfg->unset_doze_brightness, true);
+		mi_drm_notifier_call_chain(MI_DRM_EVENT_BLANK, &notify_data);
 		break;
 	case SDE_MODE_DPMS_ON:
 		if ((display->panel->power_mode == SDE_MODE_DPMS_LP1) ||
-			(display->panel->power_mode == SDE_MODE_DPMS_LP2))
+			(display->panel->power_mode == SDE_MODE_DPMS_LP2)) {
+			mi_drm_notifier_call_chain(MI_DRM_EARLY_EVENT_BLANK, &notify_data);
 			rc = dsi_panel_set_nolp(display->panel);
+			mi_drm_notifier_call_chain(MI_DRM_EVENT_BLANK, &notify_data);
+		}
 		break;
 	case SDE_MODE_DPMS_OFF:
 	default:
 		return rc;
 	}
+
 	SDE_EVT32(display->panel->power_mode, power_mode, rc);
-	DSI_INFO("Power mode transition from %d to %d %s",
+	DSI_DEBUG("Power mode transition from %d to %d %s",
 			display->panel->power_mode, power_mode,
 			rc ? "failed" : "successful");
 	if (!rc)
@@ -3017,80 +2915,6 @@ static int dsi_host_detach(struct mipi_dsi_host *host,
 	return 0;
 }
 
-#ifdef CONFIG_NUBIA_DEBUG_LCD_REG
-ssize_t dsi_panel_transfer_cmd(struct mipi_dsi_host *host,
-				const struct mipi_dsi_msg *msg)
-{
-   struct dsi_display *display;
-   int rc = 0, ret = 0;
-   int ctrl_idx;
-   u32 flags;
-
-   if (!host || !msg) {
-	pr_err("[%s] dsi_host_transfer Invalid params\n", __FUNCTION__);
-	return 0;
-   }
-   display = to_dsi_display(host);
-
-   /* Avoid sending DCS commands when ESD recovery is pending */
-   if (atomic_read(&display->panel->esd_recovery_pending)) {
-	pr_debug("ESD recovery pending\n");
-	return 0;
-   }
-
-   rc = dsi_display_clk_ctrl(display->dsi_clk_handle,
-		DSI_ALL_CLKS, DSI_CLK_ON);
-   if (rc) {
-	pr_err("[%s] failed to enable all DSI clocks, rc=%d\n",
-			display->name, rc);
-	goto error;
-   }
-
-   rc = dsi_display_cmd_engine_enable(display);
-   if (rc) {
-		pr_err("[%s] failed to enable cmd engine, rc=%d\n",
-			display->name, rc);
-	goto error_disable_clks;
-   }
-
-   if (display->tx_cmd_buf == NULL) {
-	rc = dsi_host_alloc_cmd_tx_buffer(display);
-	if (rc) {
-		pr_err("failed to allocate cmd tx buffer memory\n");
-		goto error_disable_cmd_engine;
-	}
-   }
-
-	ctrl_idx = (msg->flags & MIPI_DSI_MSG_UNICAST) ?
-		msg->ctrl : 0;
-	flags = DSI_CTRL_CMD_FETCH_MEMORY | DSI_CTRL_CMD_READ |
-	DSI_CTRL_CMD_CUSTOM_DMA_SCHED | DSI_CTRL_CMD_LAST_COMMAND;
-	rc = dsi_ctrl_cmd_transfer(display->ctrl[ctrl_idx].ctrl,
-						msg, &flags); /*DSI_CTRL_CMD_READ*/
-   if (rc <= 0) {
-	pr_err("[%s] cmd transfer failed, rc=%d\n",
-			display->name, rc);
-	goto error_disable_cmd_engine;
-   }
-
-error_disable_cmd_engine:
-   ret = dsi_display_cmd_engine_disable(display);
-   if (ret) {
-	pr_err("[%s]failed to disable DSI cmd engine, rc=%d\n",
-			display->name, ret);
-   }
-error_disable_clks:
-   ret = dsi_display_clk_ctrl(display->dsi_clk_handle,
-		DSI_ALL_CLKS, DSI_CLK_OFF);
-   if (ret) {
-	pr_err("[%s] failed to disable all DSI clocks, rc=%d\n",
-			display->name, ret);
-   }
-error:
-   return rc;
-}
-#endif
-
 static ssize_t dsi_host_transfer(struct mipi_dsi_host *host,
 				 const struct mipi_dsi_msg *msg)
 {
@@ -3321,6 +3145,9 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 	for (i = 0; i < num_clk; i++) {
 		dsi_display_get_clock_name(display, dsi_clock_name, i,
 						&clk_name);
+		if(!strcmp(clk_name,"shadow_bype_clk0"))
+			clk_name="shadow_byte_clk0";
+
 
 		DSI_DEBUG("clock name:%s\n", clk_name);
 
@@ -5220,6 +5047,116 @@ error:
 	return rc;
 }
 
+static ssize_t sysfs_dynamic_dsi_clk_read(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	int rc = 0;
+	struct dsi_display *display;
+	struct dsi_display_ctrl *m_ctrl;
+	struct dsi_ctrl *ctrl;
+
+	display = dev_get_drvdata(dev);
+	if (!display) {
+		DSI_ERR("Invalid display\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&display->display_lock);
+
+	m_ctrl = &display->ctrl[display->cmd_master_idx];
+	ctrl = m_ctrl->ctrl;
+	if (ctrl)
+		display->cached_clk_rate = ctrl->clk_freq.byte_clk_rate
+					     * 8;
+
+	rc = snprintf(buf, PAGE_SIZE, "%d\n", display->cached_clk_rate);
+	DSI_DEBUG("%s: read dsi clk rate %d\n", __func__,
+		display->cached_clk_rate);
+
+	mutex_unlock(&display->display_lock);
+
+	return rc;
+}
+
+static ssize_t sysfs_dynamic_dsi_clk_write(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	int rc = 0;
+	int clk_rate;
+	struct dsi_display *display;
+
+	display = dev_get_drvdata(dev);
+	if (!display) {
+		DSI_ERR("Invalid display\n");
+		return -EINVAL;
+	}
+
+	rc = kstrtoint(buf, DSI_CLOCK_BITRATE_RADIX, &clk_rate);
+	if (rc) {
+		DSI_ERR("%s: kstrtoint failed. rc=%d\n", __func__, rc);
+		return rc;
+	}
+
+	if (display->panel->panel_mode != DSI_OP_CMD_MODE) {
+		DSI_ERR("only supported for command mode\n");
+		return -ENOTSUPP;
+	}
+
+	DSI_INFO("%s: bitrate param value: '%d'\n", __func__, clk_rate);
+
+	mutex_lock(&display->display_lock);
+	mutex_lock(&dsi_display_clk_mutex);
+
+	rc = dsi_display_dynamic_clk_configure_cmd(display, clk_rate);
+	if (rc)
+		DSI_ERR("Failed to configure dynamic clk\n");
+	else
+		rc = count;
+
+	mutex_unlock(&dsi_display_clk_mutex);
+	mutex_unlock(&display->display_lock);
+
+	return rc;
+
+}
+
+static DEVICE_ATTR(dynamic_dsi_clock, 0644,
+			sysfs_dynamic_dsi_clk_read,
+			sysfs_dynamic_dsi_clk_write);
+
+static struct attribute *dynamic_dsi_clock_fs_attrs[] = {
+	&dev_attr_dynamic_dsi_clock.attr,
+	NULL,
+};
+static struct attribute_group dynamic_dsi_clock_fs_attrs_group = {
+	.attrs = dynamic_dsi_clock_fs_attrs,
+};
+
+static int dsi_display_sysfs_init(struct dsi_display *display)
+{
+	int rc = 0;
+	struct device *dev = &display->pdev->dev;
+
+	if (display->panel->panel_mode == DSI_OP_CMD_MODE)
+		rc = sysfs_create_group(&dev->kobj,
+			&dynamic_dsi_clock_fs_attrs_group);
+
+	return rc;
+
+}
+
+static int dsi_display_sysfs_deinit(struct dsi_display *display)
+{
+	struct device *dev = &display->pdev->dev;
+
+	if (display->panel->panel_mode == DSI_OP_CMD_MODE)
+		sysfs_remove_group(&dev->kobj,
+			&dynamic_dsi_clock_fs_attrs_group);
+
+	return 0;
+
+}
+
 /**
  * dsi_display_bind - bind dsi device with controlling device
  * @dev:        Pointer to base of platform device
@@ -5290,6 +5227,12 @@ static int dsi_display_bind(struct device *dev,
 
 	atomic_set(&display->clkrate_change_pending, 0);
 	display->cached_clk_rate = 0;
+
+	rc = dsi_display_sysfs_init(display);
+	if (rc) {
+		DSI_ERR("[%s] sysfs init failed, rc=%d\n", display->name, rc);
+		goto error;
+	}
 
 	memset(&info, 0x0, sizeof(info));
 
@@ -5404,11 +5347,6 @@ static int dsi_display_bind(struct device *dev,
 	}
 
 	DSI_INFO("Successfully bind display panel '%s'\n", display->name);
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-	if(!strcmp(display->name,"qcom,nubia_dsi_r66451_1080p_amoled_cmd") || !strcmp(display->name,"qcom,nubia_dsi_r66451_1080p_amoled_new_cmd"))
-		is_66451_panel = 1;
-	printk("display->name = %s \n", display->name);
-#endif
 	display->drm_dev = drm;
 
 	display_for_each_ctrl(i, display) {
@@ -5431,7 +5369,6 @@ static int dsi_display_bind(struct device *dev,
 	/* register te irq handler */
 	dsi_display_register_te_irq(display);
 
-	printk("%s: \n", __func__);
 	goto error;
 
 error_host_deinit:
@@ -5446,6 +5383,7 @@ error_ctrl_deinit:
 		(void)dsi_phy_drv_deinit(display_ctrl->phy);
 		(void)dsi_ctrl_drv_deinit(display_ctrl->ctrl);
 	}
+	(void)dsi_display_sysfs_deinit(display);
 	(void)dsi_display_debugfs_deinit(display);
 error:
 	mutex_unlock(&display->display_lock);
@@ -5506,6 +5444,7 @@ static void dsi_display_unbind(struct device *dev,
 	}
 
 	atomic_set(&display->clkrate_change_pending, 0);
+	(void)dsi_display_sysfs_deinit(display);
 	(void)dsi_display_debugfs_deinit(display);
 
 	mutex_unlock(&display->display_lock);
@@ -5620,15 +5559,7 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 			rc = -ENODEV;
 			goto end;
 		}
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-		if(!strcmp(boot_disp->name, "qcom,nubia_dsi_r66455_1080p_amoled_cmd") || !strcmp(boot_disp->name, "qcom,nubia_dsi_r66451_1080p_amoled_cmd") ||
-			!strcmp(boot_disp->name, "qcom,nubia_dsi_r66451_1080p_amoled_new_cmd")) {
-			nubia_set_dsi_ctrl(display);
-		}
-		if(!strcmp(boot_disp->name, "qcom,nubia_dsi_r66451_1080p_amoled_new_cmd")){
-			nubia_disp_val.panel_type = DFPS_144;
-		}
-#endif
+
 		/* The panel name should be same as UEFI name index */
 		panel_node = of_find_node_by_name(mdp_node, boot_disp->name);
 		if (!panel_node)
@@ -5646,6 +5577,7 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 	display->panel_node = panel_node;
 	display->pdev = pdev;
 	display->boot_disp = boot_disp;
+	display->is_prim_display = true;
 
 	dsi_display_parse_cmdline_topology(display, index);
 
@@ -6984,11 +6916,16 @@ int dsi_display_set_mode(struct dsi_display *display,
 		goto error;
 	}
 
-	DSI_INFO("mdp_transfer_time_us=%d us\n",
+	DSI_DEBUG("mdp_transfer_time_us=%d us\n",
 			adj_mode.priv_info->mdp_transfer_time_us);
-	DSI_INFO("hactive= %d,vactive= %d,fps=%d\n",
+	DSI_DEBUG("hactive= %d,vactive= %d,fps=%d\n",
 			timing.h_active, timing.v_active,
 			timing.refresh_rate);
+
+	if (display->panel->cur_mode->timing.refresh_rate != timing.refresh_rate) {
+		if (display->drm_conn && display->drm_conn->kdev)
+			sysfs_notify(&display->drm_conn->kdev->kobj, NULL, "dynamic_fps");
+	}
 
 	memcpy(display->panel->cur_mode, &adj_mode, sizeof(adj_mode));
 error:
@@ -7751,215 +7688,6 @@ error_out:
 	return rc;
 }
 
-#ifdef CONFIG_NUBIA_DEBUG_LCD_REG
-/*
-* OSC is not the same with fps
-*/
-int dsi_display_read_osc_value(struct dsi_panel *panel)
-{
-	int rc = 0;
-	struct mipi_dsi_device *dsi;
-	u8 cmd1[1] = {0x04};
-	u8 cmd2[4] = {0x00,0x00,0x00,0x02};
-	u8 *rx_buf = NULL;
-
-	if (!panel) {
-		DSI_ERR("Invalid params\n");
-		return -EINVAL;
-	}
-
-	dsi = &panel->mipi_device;
-	rx_buf = (u8*)kzalloc(30, GFP_KERNEL);
-	rc = mipi_dsi_dcs_write(dsi, 0xB0, cmd1, sizeof(cmd1));
-	rc |= mipi_dsi_dcs_write(dsi, 0xE8, cmd2, sizeof(cmd2));
-	if(rc < 0){
-		printk("%s: write register to read osc fail \n", __func__);
-	}
-	rc = dsi_panel_read_data(dsi, 0xE4, rx_buf, 20);
-	if(rc < 0){
-		printk("%s:  read osc fail \n", __func__);
-	}
-	osc_value_90 = rx_buf[1];
-	osc_value_120 = rx_buf[19];
-
-	printk("%s: osc_value_90 = %d \n", __func__, osc_value_90);
-	printk("%s: osc_value_120 = %d \n", __func__, osc_value_120);
-
-	kfree(rx_buf);
-	rx_buf = NULL;
-	return rc;
-}
-
-/**
-** 120/144Hz are in panel flash, when the panel bring up we must read it
-**/
-int nubia_dsi_read_gamma_flash(struct mipi_dsi_device *dsi)
-{
-	int i = 0;
-	int rc = 0;
-	u8 cmd1[1] = {0x04};
-	u8 cmd2[1] = {0x01};
-	u8 cmd3[2] = {0x40,0x58};
-	u8 cmd4[5] = {0x50,0x00,0x00,0x00,0x00};
-	u8 cmd5[1] = {0x11};
-	u8 cmd6[5] = {0x01,0x00,0x00,0x00,0x01};
-	u8 cmd7[2] = {0x00,0x02};
-	u8 cmd8[1] = {0x19};
-	u8 cmd9[2] = {0x42,0x58};
-	u8 cmd10[1] = {0x0f};
-	u8 cmd11[5] = {0x6B,0x00,0x01,0x00,0x90};
-	u8 cmd12[5] = {0x6B,0x00,0x02,0x00,0x90};
-	u8 cmd13[5] = {0x6B,0x00,0x03,0x00,0x90};
-	u8 cmd14[5] = {0x6B,0x00,0x04,0x00,0x90};
-	u8 cmd15[5] = {0x6B,0x00,0x05,0x00,0x90};
-	unsigned char *rx_buff = NULL;
-	rx_buff = (unsigned char *)kzalloc(144, GFP_KERNEL);
-	/***write enable for volatile status register****/
-	mipi_dsi_dcs_write(dsi, 0xB0, cmd1, sizeof(cmd1));
-	mipi_dsi_dcs_write(dsi, 0xF1, cmd2, sizeof(cmd2));
-	mipi_dsi_dcs_write(dsi, 0xDF, cmd3, sizeof(cmd3));
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd4, sizeof(cmd4));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd5, sizeof(cmd5));
-
-	msleep(100);
-	/***write status register 2****/
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd6, sizeof(cmd6));
-	mipi_dsi_dcs_write(dsi, 0xF4, cmd7, sizeof(cmd7));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd8, sizeof(cmd8));
-
-	msleep(100);
-	/*****write regulator c7**********/
-	mipi_dsi_dcs_write(dsi, 0xF1, cmd2, sizeof(cmd2));
-	mipi_dsi_dcs_write(dsi, 0xDF, cmd9, sizeof(cmd9));
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd11, sizeof(cmd11));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd10, sizeof(cmd10));
-
-	msleep(100);
-	rc = dsi_panel_read_data(dsi, 0xF4, rx_buff, 144);
-	for (i = 0; i < 144; i++){
-		 gamma1[i] = rx_buff[i];
-	}
-
-	/***write regulator c8**********/
-	mipi_dsi_dcs_write(dsi, 0xF1, cmd2, sizeof(cmd2));
-	mipi_dsi_dcs_write(dsi, 0xDF, cmd9, sizeof(cmd9));
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd12, sizeof(cmd12));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd10, sizeof(cmd10));
-	msleep(100);
-
-	//memset(rx_buff, 0, sizeof(rx_buff));
-	rc = dsi_panel_read_data(dsi, 0xF4, rx_buff, 144);
-	for (i = 0; i < 144; i++){
-		gamma2[i] = rx_buff[i];;
-	}
-
-	/**** write regulator c9**********/
-	mipi_dsi_dcs_write(dsi, 0xF1, cmd2, sizeof(cmd2));
-	mipi_dsi_dcs_write(dsi, 0xDF, cmd9, sizeof(cmd9));
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd13, sizeof(cmd13));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd10, sizeof(cmd10));
-	msleep(100);
-
-	//memset(rx_buff, 0, sizeof(rx_buff));
-	rc = dsi_panel_read_data(dsi, 0xF4, rx_buff, 144);
-	for (i = 0; i < 144; i++){
-	        gamma3[i] = rx_buff[i];
-	}
-
-	/***wrtie regulator ca**********/
-	mipi_dsi_dcs_write(dsi, 0xF1, cmd2, sizeof(cmd2));
-	mipi_dsi_dcs_write(dsi, 0xDF, cmd9, sizeof(cmd9));
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd14, sizeof(cmd14));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd10, sizeof(cmd10));
-	msleep(100);
-
-	//memset(rx_buff, 0, sizeof(rx_buff));
-	rc = dsi_panel_read_data(dsi, 0xF4, rx_buff, 144);
-	for (i = 0; i < 144; i++){
-	        gamma4[i] = rx_buff[i];
-	}
-
-	/*** write regulator cB**********/
-	mipi_dsi_dcs_write(dsi, 0xF1, cmd2, sizeof(cmd2));
-	mipi_dsi_dcs_write(dsi, 0xDF, cmd9, sizeof(cmd9));
-	mipi_dsi_dcs_write(dsi, 0xF3, cmd15, sizeof(cmd15));
-	mipi_dsi_dcs_write(dsi, 0xF2, cmd10, sizeof(cmd10));
-	msleep(100);
-
-	//memset(rx_buff, 0, sizeof(rx_buff));
-	rc = dsi_panel_read_data(dsi, 0xF4, rx_buff, 144);
-	for (i = 0; i < 144; i++){
-	        gamma5[i] = rx_buff[i];
-	}
-
-
-	kfree(rx_buff);
-	rx_buff = NULL;
-	return rc;
-}
-
-/**
-** 60/90Hz are in register, when the panel bring up we must read it
-**/
-void nubia_dsi_read_gamma_register(struct mipi_dsi_device *dsi)
-{
-	int i;
-	u8 cmd1[1] = {0x00};
-	u8 *rx_buf1 = NULL;
-	u8 *rx_buf2 = NULL;
-	u8 *rx_buf3 = NULL;
-	u8 *rx_buf4 = NULL;
-	u8 *rx_buf5 = NULL;
-	rx_buf1 = (u8 *)kzalloc(144, GFP_KERNEL);
-	rx_buf2 = (u8 *)kzalloc(144, GFP_KERNEL);
-	rx_buf3 = (u8 *)kzalloc(144, GFP_KERNEL);
-	rx_buf4 = (u8 *)kzalloc(144, GFP_KERNEL);
-	rx_buf5 = (u8 *)kzalloc(144, GFP_KERNEL);
-	mipi_dsi_dcs_write(dsi, 0xB0, cmd1, sizeof(cmd1));
-	dsi_panel_read_data(dsi, 0xC7, rx_buf1, 144);
-	dsi_panel_read_data(dsi, 0xC8, rx_buf2, 144);
-	dsi_panel_read_data(dsi, 0xC9, rx_buf3, 144);
-	dsi_panel_read_data(dsi, 0xCA, rx_buf4, 144);
-	dsi_panel_read_data(dsi, 0xCB, rx_buf5, 144);
-	for (i = 0; i < 144; i++){
-		gamma6[i] = rx_buf1[i];
-		gamma7[i] = rx_buf2[i];
-		gamma8[i] = rx_buf3[i];
-		gamma9[i] = rx_buf4[i];
-		gamma10[i] = rx_buf5[i];
-    }
-
-	kfree(rx_buf1);
-	kfree(rx_buf2);
-	kfree(rx_buf3);
-	kfree(rx_buf4);
-	kfree(rx_buf5);
-	rx_buf1 = NULL;
-	rx_buf2 = NULL;
-	rx_buf3 = NULL;
-	rx_buf4 = NULL;
-	rx_buf5 = NULL;
-}
-
-int dsi_display_read_gamma_value(struct dsi_panel *panel)
-{
-	struct mipi_dsi_device *dsi;
-	if (!panel) {
-		DSI_ERR("Invalid params\n");
-		return -EINVAL;
-	}
-	dsi = &panel->mipi_device;
-
-	/**
-	** there are two gamma, one for 60/90Hz and another for 120/144Hz
-	** the 60/90 are in register, 120/144 are in panel flash
-	** when the panel bring up, we must read gamma to store it
-	**/
-	nubia_dsi_read_gamma_register(dsi);
-	nubia_dsi_read_gamma_flash(dsi);
-	return 0;
-}
-#endif
 int dsi_display_pre_commit(void *display,
 		struct msm_display_conn_params *params)
 {
@@ -7983,42 +7711,21 @@ int dsi_display_pre_commit(void *display,
 	return rc;
 }
 
-#ifdef CONFIG_NUBIA_DEBUG_LCD_REG
-void dsi_display_config_panel(struct dsi_panel *panel)
+unsigned int dsi_panel_get_refresh_rate(void)
 {
-	if(read_osc_count == 0)
-	{
-		if(is_66451_panel == 1){
-			dsi_display_read_osc_value(panel);
-			dsi_display_read_gamma_value(panel);
-		}
-		#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-		nubia_read_panel_type(panel);
-		#endif
-	}
-	read_osc_count = 1;
-	//nubia_write_panel_osc_timing(fps_store, dsi);
-	printk("%s fps_store = %d: \n", __func__, fps_store);
+	return READ_ONCE(cur_refresh_rate);
 }
-EXPORT_SYMBOL(dsi_display_config_panel);
-
-#endif
 
 int dsi_display_enable(struct dsi_display *display)
 {
 	int rc = 0;
 	struct dsi_display_mode *mode;
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-	u32 cur_fps;
-#endif
 
 	if (!display || !display->panel) {
 		DSI_ERR("Invalid params\n");
 		return -EINVAL;
 	}
-#ifdef CONFIG_NUBIA_DEBUG_LCD_REG
-	dsi_display_config_panel(display->panel);
-#endif
+
 	if (!display->panel->cur_mode) {
 		DSI_ERR("no valid mode set for the display\n");
 		return -EINVAL;
@@ -8041,30 +7748,44 @@ int dsi_display_enable(struct dsi_display *display)
 
 		display->panel->panel_initialized = true;
 		DSI_DEBUG("cont splash enabled, display enable not required\n");
+
+		rc = dsi_panel_update_elvss_dimming(display->panel);
+		if (rc) {
+			DSI_ERR("[%s] failed to update elvss dimming parameter, rc=%d\n",
+			       display->name, rc);
+		}
+
+		rc = dsi_panel_read_gamma_param(display->panel);
+		if (rc) {
+			DSI_ERR("[%s] failed to read gamma para, rc=%d\n",
+				display->name, rc);
+		} else {
+			rc = dsi_panel_update_gamma_param(display->panel);
+			if (rc) {
+				DSI_ERR("[%s] failed to update gamma para, rc=%d\n",
+					display->name, rc);
+			}
+		}
+
+		rc = dsi_panel_read_dc_param(display->panel);
+		if (rc) {
+			DSI_ERR("[%s] failed to read DC para, rc=%d\n",
+				display->name, rc);
+		} else {
+			rc = dsi_panel_update_dc_param(display->panel);
+			if (rc) {
+				DSI_ERR("[%s] failed to update DC para, rc=%d\n",
+					display->name, rc);
+			}
+		}
+
 		return 0;
 	}
 
 	mutex_lock(&display->display_lock);
 
 	mode = display->panel->cur_mode;
-
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-	cur_fps = display->panel->cur_mode->timing.refresh_rate;
-	/* 60/62/90 use one set osc_gamma, 120/144 use aother set osc_gamma*/
-	if (cur_fps == 90 || cur_fps == 60 || cur_fps == 62) {
-		if (last_fps == 90 || last_fps == 60 || last_fps == 62)
-			need_change_osc_gamma = false;
-		else
-			need_change_osc_gamma = true;
-	} else {
-		if (last_fps == 90 || last_fps == 60 || last_fps == 62)
-			need_change_osc_gamma = true;
-		else
-			need_change_osc_gamma = false;
-	}
-	printk("%s: current fps = %d, last fps = %d \n", __func__, cur_fps, last_fps);
-	last_fps = cur_fps;
-#endif
+	WRITE_ONCE(cur_refresh_rate, mode->timing.refresh_rate);
 
 	if (mode->dsi_mode_flags & DSI_MODE_FLAG_DMS) {
 		rc = dsi_panel_post_switch(display->panel);
@@ -8097,10 +7818,28 @@ int dsi_display_enable(struct dsi_display *display)
 
 	if (mode->dsi_mode_flags & DSI_MODE_FLAG_DMS) {
 		rc = dsi_panel_switch(display->panel);
-		if (rc)
+		if (rc) {
 			DSI_ERR("[%s] failed to switch DSI panel mode, rc=%d\n",
 				   display->name, rc);
+			goto error;
+		}
 
+		if ((display->panel->mi_cfg.panel_id >> 8) == 0x4A3153004202) {
+
+			rc = dsi_panel_dc_switch(display->panel);
+			if (rc) {
+				DSI_ERR("[%s] failed to set dc command, rc=%d\n",
+					display->name, rc);
+				goto error;
+			}
+		}
+
+		rc = dsi_panel_switch_disp_rate_gpio(display->panel);
+		if (rc) {
+			DSI_ERR("[%s] failed to set disp_rate gpio, rc=%d\n",
+				   display->name, rc);
+			goto error;
+		}
 		goto error;
 	}
 
@@ -8395,6 +8134,36 @@ static void __exit dsi_display_unregister(void)
 	dsi_ctrl_drv_unregister();
 	dsi_phy_drv_unregister();
 }
+
+char *dsi_display_get_cmdline_panel_info(void)
+{
+	char *buffer = NULL, *buffer_dup = NULL;
+	char *pname = NULL;
+	char *panel_info = NULL;
+
+	buffer = kstrdup(dsi_display_primary, GFP_KERNEL);
+	if (!buffer)
+		return NULL;
+	buffer_dup = buffer;
+
+	buffer = strrchr(buffer, ',');
+	if (buffer && *buffer) {
+		pname = ++buffer;
+	} else {
+		goto exit;
+	}
+
+	buffer = strrchr(pname, ':');
+	if (buffer)
+		*buffer = '\0';
+
+	panel_info = kstrdup(pname, GFP_KERNEL);
+
+exit:
+	kfree(buffer_dup);
+	return panel_info;
+}
+
 module_param_string(dsi_display0, dsi_display_primary, MAX_CMDLINE_PARAM_LEN,
 								0600);
 MODULE_PARM_DESC(dsi_display0,

@@ -70,6 +70,8 @@ module_param(panic_on_adj_zero, int, 0644);
  * and mark_oom_victim
  */
 DEFINE_MUTEX(oom_lock);
+/* Serializes oom_score_adj and oom_score_adj_min updates */
+DEFINE_MUTEX(oom_adj_mutex);
 
 /*
  * If ULMK has killed a process recently,
@@ -816,10 +818,7 @@ static int oom_reaper(void *unused)
 	return 0;
 }
 
-//nubia add for lowmemorykiller
-//static void wake_oom_reaper(struct task_struct *tsk)
-void wake_oom_reaper(struct task_struct *tsk)
-//nubia add end
+static void wake_oom_reaper(struct task_struct *tsk)
 {
 	/*
 	 * Move the lock here to avoid scenario of queuing

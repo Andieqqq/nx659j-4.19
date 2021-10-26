@@ -20,6 +20,7 @@
 #include "dsi_pwr.h"
 #include "dsi_parser.h"
 #include "msm_drv.h"
+#include "dsi_panel_mi.h"
 
 #define MAX_BL_LEVEL 4096
 #define MAX_BL_SCALE_LEVEL 1024
@@ -34,10 +35,6 @@
  * Override to use async transfer
  */
 #define MIPI_DSI_MSG_ASYNC_OVERRIDE BIT(4)
-
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-#define DEMURA_CHECK_NUM 7
-#endif
 
 enum dsi_panel_rotation {
 	DSI_PANEL_ROTATE_NONE = 0,
@@ -115,15 +112,13 @@ struct dsi_backlight_config {
 	u32 bl_min_level;
 	u32 bl_max_level;
 	u32 brightness_max_level;
+	u32 brightness_init_level;
 	u32 bl_level;
 	u32 bl_scale;
 	u32 bl_scale_sv;
 	bool bl_inverted_dbv;
-#ifdef CONFIG_NUBIA_BACKLIGHT_CURVE
-	uint32_t backlight_curve[256];
-#endif
+
 	int en_gpio;
-	int lhbm_gpio;
 	/* PWM params */
 	struct pwm_device *pwm_bl;
 	bool pwm_enabled;
@@ -169,9 +164,6 @@ struct drm_panel_esd_config {
 	u8 *return_buf;
 	u8 *status_buf;
 	u32 groups;
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-	u32 demura_checksum; /* stautus demura esd checksum */
-#endif
 };
 
 struct dsi_panel {
@@ -224,6 +216,7 @@ struct dsi_panel {
 
 	bool sync_broadcast_en;
 
+	struct dsi_panel_mi_cfg mi_cfg;
 	int panel_test_gpio;
 	int power_mode;
 	enum dsi_panel_physical_type panel_type;
@@ -332,6 +325,8 @@ int dsi_panel_switch(struct dsi_panel *panel);
 
 int dsi_panel_post_switch(struct dsi_panel *panel);
 
+int dsi_panel_dc_switch(struct dsi_panel *panel);
+
 void dsi_dsc_pclk_param_calc(struct msm_display_dsc_info *dsc, int intf_width);
 
 void dsi_panel_bl_handoff(struct dsi_panel *panel);
@@ -347,21 +342,18 @@ void dsi_panel_ext_bridge_put(struct dsi_panel *panel);
 void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
 		struct dsi_display_mode *mode, u32 frame_threshold_us);
 
-#ifdef CONFIG_NUBIA_DISP_PREFERENCE
-int nubia_dsi_panel_cabc(struct dsi_panel *panel, uint32_t cabc_modes);
-void nubia_read_panel_type(struct dsi_panel *panel);
+int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
+				enum dsi_cmd_set_type type);
+int dsi_panel_update_backlight(struct dsi_panel *panel,
+				u32 bl_lvl);
+int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt);
+int dsi_panel_alloc_cmd_packets(struct dsi_panel_cmd_set *cmd,
+				u32 packet_count);
+int dsi_panel_create_cmd_packets(const char *data,
+				u32 length,
+				u32 count,
+				struct dsi_cmd_desc *cmd);
+void dsi_panel_destroy_cmd_packets(struct dsi_panel_cmd_set *set);
+void dsi_panel_dealloc_cmd_packets(struct dsi_panel_cmd_set *set);
 
-#endif
-#ifdef CONFIG_NUBIA_AOD_HBM_MODE
-int nubia_dsi_panel_aod(struct dsi_panel *panel, uint32_t aod_modes);
-int nubia_dsi_panel_hbm(struct dsi_panel *panel, uint32_t hbm_modes);
-#endif
-#ifdef CONFIG_NUBIA_DEBUG_LCD_REG
-int dsi_panel_read_data(struct mipi_dsi_device *dsi, u8 cmd, void* buf, size_t len);
-int dsi_panel_write_data(struct mipi_dsi_device *dsi, u8 cmd, void* buf, size_t len);
-#endif
-#ifdef CONFIG_NUBIA_DFPS_SWITCH
-int nubia_dsi_panel_dfps(struct dsi_panel *panel, uint32_t dfps);
-void nubia_write_panel_osc_timing(uint32_t dfps, struct mipi_dsi_device *dsi);
-#endif
 #endif /* _DSI_PANEL_H_ */

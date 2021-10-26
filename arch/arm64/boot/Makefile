@@ -27,6 +27,7 @@ else
 DTB_LIST := $(dtb-y)
 endif
 DTB_OBJS := $(shell find $(obj)/dts/ -name \*.dtb)
+
 DTBO_OBJS := $(shell find $(obj)/dts/ -name \*.dtbo)
 
 # Add RTIC DTB to the DTB list if RTIC MPGen is enabled
@@ -71,7 +72,7 @@ $(obj)/Image.gz-dtb: $(obj)/Image.gz $(DTB_OBJS) FORCE
 
 $(obj)/dtbo.img: $(DTBO_OBJS) FORCE
 	$(call if_changed,mkdtimg)
-	
+
 install:
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \
 	$(obj)/Image System.map "$(INSTALL_PATH)"

@@ -1,7 +1,0 @@
-/*
- * nubia overwrite dts
- */
-
-
-#include "others.dtsi"
-

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
-#define DEBUG
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -24,9 +23,9 @@
 #include <asoc/wcd-mbhc-v2.h>
 #include <asoc/pdata.h>
 
-#define WCD_MBHC_ADC_HS_THRESHOLD_MV    2700
-#define WCD_MBHC_ADC_HPH_THRESHOLD_MV   50
-#define WCD_MBHC_ADC_MICBIAS_MV         2701
+#define WCD_MBHC_ADC_HS_THRESHOLD_MV    1700
+#define WCD_MBHC_ADC_HPH_THRESHOLD_MV   75
+#define WCD_MBHC_ADC_MICBIAS_MV         1800
 #define WCD_MBHC_FAKE_INS_RETRY         4
 
 static int wcd_mbhc_get_micbias(struct wcd_mbhc *mbhc)
@@ -773,6 +772,12 @@ correct_plug_type:
 		}
 
 		msleep(180);
+		/* In the case of system bootup with headset pluged, mbhc
+		 * begin to detect without sound card registered. delay
+		 * about 150ms to wait sound card registe.
+		 */
+		if ((mbhc->mbhc_cfg->swap_gnd_mic == NULL) && (mbhc->mbhc_cfg->enable_usbc_analog))
+			msleep(200);
 		/*
 		 * Use ADC single mode to minimize the chance of missing out
 		 * btn press/release for HEADSET type during correct work.
@@ -955,6 +960,9 @@ enable_supply:
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_DETECTION_DONE, 1);
 	else
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_DETECTION_DONE, 0);
+
+	if (plug_type == MBHC_PLUG_TYPE_HEADSET)
+		mbhc->micbias_enable = true;
 
 	if (mbhc->mbhc_cb->mbhc_micbias_control)
 		wcd_mbhc_adc_update_fsm_source(mbhc, plug_type);
@@ -1148,6 +1156,7 @@ static irqreturn_t wcd_mbhc_adc_hs_ins_irq(int irq, void *data)
 	 * get ADC complete interrupt, so connected cable should be
 	 * headset not headphone.
 	 */
+	/*
 	if (mbhc->current_plug == MBHC_PLUG_TYPE_HEADPHONE) {
 		wcd_mbhc_hs_elec_irq(mbhc, WCD_MBHC_ELEC_HS_INS, false);
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_DETECTION_DONE, 1);
@@ -1155,6 +1164,7 @@ static irqreturn_t wcd_mbhc_adc_hs_ins_irq(int irq, void *data)
 		WCD_MBHC_RSC_UNLOCK(mbhc);
 		return IRQ_HANDLED;
 	}
+	*/
 
 	if (!mbhc->mbhc_cfg->detect_extn_cable) {
 		pr_debug("%s: Returning as Extension cable feature not enabled\n",

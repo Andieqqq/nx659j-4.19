@@ -11,8 +11,6 @@
  */
 #include "sched.h"
 
-static DEFINE_SPINLOCK(sched_debug_lock);
-
 /*
  * This allows printing both to /proc/sched_debug and
  * to the console
@@ -382,8 +380,11 @@ void dirty_sched_domain_sysctl(int cpu)
 /* may be called multiple times per register */
 void unregister_sched_domain_sysctl(void)
 {
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	unregister_sysctl_table(sd_sysctl_header);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	sd_sysctl_header = NULL;
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 }
 #endif /* CONFIG_SYSCTL */
 #endif /* CONFIG_SMP */
@@ -434,16 +435,37 @@ static void print_cfs_group_stats(struct seq_file *m, int cpu, struct task_group
 #endif
 
 #ifdef CONFIG_CGROUP_SCHED
+static DEFINE_SPINLOCK(sched_debug_lock);
 static char group_path[PATH_MAX];
 
-static char *task_group_path(struct task_group *tg)
+static void task_group_path(struct task_group *tg, char *path, int plen)
 {
-	if (autogroup_path(tg, group_path, PATH_MAX))
-		return group_path;
+	if (autogroup_path(tg, path, plen))
+		return;
 
-	cgroup_path(tg->css.cgroup, group_path, PATH_MAX);
+	cgroup_path(tg->css.cgroup, path, plen);
+}
 
-	return group_path;
+/*
+ * Only 1 SEQ_printf_task_group_path() caller can use the full length
+ * group_path[] for cgroup path. Other simultaneous callers will have
+ * to use a shorter stack buffer. A "..." suffix is appended at the end
+ * of the stack buffer so that it will show up in case the output length
+ * matches the given buffer size to indicate possible path name truncation.
+ */
+#define SEQ_printf_task_group_path(m, tg, fmt...)			\
+{									\
+	if (spin_trylock(&sched_debug_lock)) {				\
+		task_group_path(tg, group_path, sizeof(group_path));	\
+		SEQ_printf(m, fmt, group_path);				\
+		spin_unlock(&sched_debug_lock);				\
+	} else {							\
+		char buf[128];						\
+		char *bufend = buf + sizeof(buf) - 3;			\
+		task_group_path(tg, buf, bufend - buf);			\
+		strcpy(bufend - 1, "...");				\
+		SEQ_printf(m, fmt, buf);				\
+	}								\
 }
 #endif
 
@@ -470,7 +492,7 @@ print_task(struct seq_file *m, struct rq *rq, struct task_struct *p)
 	SEQ_printf(m, " %d %d", task_node(p), task_numa_group_id(p));
 #endif
 #ifdef CONFIG_CGROUP_SCHED
-	SEQ_printf(m, " %s", task_group_path(task_group(p)));
+	SEQ_printf_task_group_path(m, task_group(p), " %s")
 #endif
 
 	SEQ_printf(m, "\n");
@@ -507,7 +529,7 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	SEQ_printf(m, "\n");
-	SEQ_printf(m, "cfs_rq[%d]:%s\n", cpu, task_group_path(cfs_rq->tg));
+	SEQ_printf_task_group_path(m, cfs_rq->tg, "cfs_rq[%d]:%s\n", cpu);
 #else
 	SEQ_printf(m, "\n");
 	SEQ_printf(m, "cfs_rq[%d]:\n", cpu);
@@ -579,7 +601,7 @@ void print_rt_rq(struct seq_file *m, int cpu, struct rt_rq *rt_rq)
 {
 #ifdef CONFIG_RT_GROUP_SCHED
 	SEQ_printf(m, "\n");
-	SEQ_printf(m, "rt_rq[%d]:%s\n", cpu, task_group_path(rt_rq->tg));
+	SEQ_printf_task_group_path(m, rt_rq->tg, "rt_rq[%d]:%s\n", cpu);
 #else
 	SEQ_printf(m, "\n");
 	SEQ_printf(m, "rt_rq[%d]:\n", cpu);
@@ -631,7 +653,6 @@ void print_dl_rq(struct seq_file *m, int cpu, struct dl_rq *dl_rq)
 static void print_cpu(struct seq_file *m, int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
-	unsigned long flags;
 
 #ifdef CONFIG_X86
 	{
@@ -673,16 +694,6 @@ do {									\
 #ifdef CONFIG_SMP
 	P(cpu_capacity);
 #endif
-#ifdef CONFIG_SCHED_WALT
-	P(cluster->max_possible_capacity);
-	P(cluster->efficiency);
-	P(cluster->cur_freq);
-	P(cluster->max_freq);
-	P(cluster->exec_scale_factor);
-	P(walt_stats.nr_big_tasks);
-	SEQ_printf(m, "  .%-30s: %llu\n", "walt_stats.cumulative_runnable_avg",
-			rq->walt_stats.cumulative_runnable_avg_scaled);
-#endif
 #undef P
 #undef PN
 
@@ -703,13 +714,11 @@ do {									\
 	}
 #undef P
 
-	spin_lock_irqsave(&sched_debug_lock, flags);
 	print_cfs_stats(m, cpu);
 	print_rt_stats(m, cpu);
 	print_dl_stats(m, cpu);
 
 	print_rq(m, rq, cpu);
-	spin_unlock_irqrestore(&sched_debug_lock, flags);
 	SEQ_printf(m, "\n");
 }
 
@@ -761,11 +770,6 @@ static void sched_debug_header(struct seq_file *m)
 	PN(sysctl_sched_wakeup_granularity);
 	P(sysctl_sched_child_runs_first);
 	P(sysctl_sched_features);
-#ifdef CONFIG_SCHED_WALT
-	P(sched_init_task_load_windows);
-	P(sched_ravg_window);
-	P(sched_load_granule);
-#endif
 #undef PN
 #undef P
 
@@ -853,10 +857,11 @@ static int __init init_sched_debug_procfs(void)
 
 __initcall(init_sched_debug_procfs);
 
-#define __P(F)	SEQ_printf(m, "%-45s:%21Ld\n",	     #F, (long long)F)
-#define   P(F)	SEQ_printf(m, "%-45s:%21Ld\n",	     #F, (long long)p->F)
-#define __PN(F)	SEQ_printf(m, "%-45s:%14Ld.%06ld\n", #F, SPLIT_NS((long long)F))
-#define   PN(F)	SEQ_printf(m, "%-45s:%14Ld.%06ld\n", #F, SPLIT_NS((long long)p->F))
+#define  PM(F, M) SEQ_printf(m, "%-45s:%21Ld\n",       #F, (long long)p->F & (M))
+#define __P(F)	  SEQ_printf(m, "%-45s:%21Ld\n",       #F, (long long)F)
+#define   P(F)	  SEQ_printf(m, "%-45s:%21Ld\n",       #F, (long long)p->F)
+#define __PN(F)	  SEQ_printf(m, "%-45s:%14Ld.%06ld\n", #F, SPLIT_NS((long long)F))
+#define   PN(F)	  SEQ_printf(m, "%-45s:%14Ld.%06ld\n", #F, SPLIT_NS((long long)p->F))
 
 
 #ifdef CONFIG_NUMA_BALANCING
@@ -957,9 +962,6 @@ void proc_sched_show_task(struct task_struct *p, struct pid_namespace *ns,
 		P_SCHEDSTAT(se.statistics.nr_wakeups_passive);
 		P_SCHEDSTAT(se.statistics.nr_wakeups_idle);
 
-#ifdef CONFIG_SCHED_WALT
-		P(ravg.demand);
-#endif
 		avg_atom = p->se.sum_exec_runtime;
 		if (nr_switches)
 			avg_atom = div64_ul(avg_atom, nr_switches);
@@ -995,11 +997,11 @@ void proc_sched_show_task(struct task_struct *p, struct pid_namespace *ns,
 	P(se.avg.util_avg);
 	P(se.avg.last_update_time);
 	P(se.avg.util_est.ewma);
-	P(se.avg.util_est.enqueued);
+	PM(se.avg.util_est.enqueued, ~UTIL_AVG_UNCHANGED);
 #endif
 	P(policy);
 	P(prio);
-	if (p->policy == SCHED_DEADLINE) {
+	if (task_has_dl_policy(p)) {
 		P(dl.runtime);
 		P(dl.deadline);
 	}

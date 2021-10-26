@@ -1,2 +1,0 @@
-obj-$(CONFIG_NUBIA_FP_GOODIX_GW9558) += gw9558/
-

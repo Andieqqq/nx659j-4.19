@@ -31,7 +31,6 @@
 #include <linux/suspend.h>
 #include <trace/events/power.h>
 #include <linux/cpufreq.h>
-#include <linux/cpuidle.h>
 #include <linux/timer.h>
 #include <linux/wakeup_reason.h>
 
@@ -798,7 +797,6 @@ void dpm_noirq_end(void)
 {
 	resume_device_irqs();
 	device_wakeup_disarm_wake_irqs();
-	cpuidle_resume();
 }
 
 /**
@@ -1363,6 +1361,8 @@ Run:
 	error = dpm_run_callback(callback, dev, state, info);
 	if (error) {
 		async_error = error;
+		log_suspend_abort_reason("Callback failed on %s in %pS returned %d",
+					 dev_name(dev), callback, error);
 		goto Complete;
 	}
 
@@ -1414,7 +1414,6 @@ static int device_suspend_noirq(struct device *dev)
 
 void dpm_noirq_begin(void)
 {
-	cpuidle_pause();
 	device_wakeup_arm_wake_irqs();
 	suspend_device_irqs();
 }
@@ -1577,6 +1576,8 @@ Run:
 	error = dpm_run_callback(callback, dev, state, info);
 	if (error) {
 		async_error = error;
+		log_suspend_abort_reason("Callback failed on %s in %pS returned %d",
+					 dev_name(dev), callback, error);
 		goto Complete;
 	}
 	dpm_propagate_wakeup_to_parent(dev);
@@ -1746,7 +1747,6 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	pm_callback_t callback = NULL;
 	const char *info = NULL;
 	int error = 0;
-	char suspend_abort[MAX_SUSPEND_ABORT_LEN];
 	DECLARE_DPM_WATCHDOG_ON_STACK(wd);
 
 	TRACE_DEVICE(dev);
@@ -1760,22 +1760,20 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	}
 
 	/*
-	 * If a device configured to wake up the system from sleep states
-	 * has been suspended at run time and there's a resume request pending
-	 * for it, this is equivalent to the device signaling wakeup, so the
-	 * system suspend operation should be aborted.
+	 * Wait for possible runtime PM transitions of the device in progress
+	 * to complete and if there's a runtime resume request pending for it,
+	 * resume it before proceeding with invoking the system-wide suspend
+	 * callbacks for it.
+	 *
+	 * If the system-wide suspend callbacks below change the configuration
+	 * of the device, they must disable runtime PM for it or otherwise
+	 * ensure that its runtime-resume callbacks will not be confused by that
+	 * change in case they are invoked going forward.
 	 */
-	if (pm_runtime_barrier(dev) && device_may_wakeup(dev))
-		pm_wakeup_event(dev, 0);
+	pm_runtime_barrier(dev);
 
 	if (pm_wakeup_pending()) {
-		pm_get_active_wakeup_sources(suspend_abort,
-			MAX_SUSPEND_ABORT_LEN);
-		log_suspend_abort_reason(suspend_abort);
 		dev->power.direct_complete = false;
-		pm_get_active_wakeup_sources(suspend_abort,
-			MAX_SUSPEND_ABORT_LEN);
-		log_suspend_abort_reason(suspend_abort);
 		async_error = -EBUSY;
 		goto Complete;
 	}
@@ -1850,6 +1848,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 
 		dpm_propagate_wakeup_to_parent(dev);
 		dpm_clear_superiors_direct_complete(dev);
+	} else {
+		log_suspend_abort_reason("Callback failed on %s in %pS returned %d",
+					 dev_name(dev), callback, error);
 	}
 
 	device_unlock(dev);
@@ -2064,6 +2065,8 @@ int dpm_prepare(pm_message_t state)
 			printk(KERN_INFO "PM: Device %s not prepared "
 				"for power transition: code %d\n",
 				dev_name(dev), error);
+			log_suspend_abort_reason("Device %s not prepared for power transition: code %d",
+						 dev_name(dev), error);
 			dpm_save_failed_dev(dev_name(dev));
 			put_device(dev);
 			break;

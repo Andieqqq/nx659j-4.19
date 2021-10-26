@@ -30,9 +30,6 @@
 #include "wsa883x.h"
 #include "internal.h"
 
-#ifndef CONFIG_DEBUG_FS
-#define CONFIG_DEBUG_FS
-#endif
 #define T1_TEMP -10
 #define T2_TEMP 150
 #define LOW_TEMP_THRESHOLD 5

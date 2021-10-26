@@ -66,13 +66,14 @@ struct task_struct init_task
 #endif
 	.state		= 0,
 	.stack		= init_stack,
-	.usage		= ATOMIC_INIT(2),
+	.usage		= REFCOUNT_INIT(2),
 	.flags		= PF_KTHREAD,
 	.prio		= MAX_PRIO - 20,
 	.static_prio	= MAX_PRIO - 20,
 	.normal_prio	= MAX_PRIO - 20,
 	.policy		= SCHED_NORMAL,
-	.cpus_allowed	= CPU_MASK_ALL,
+	.cpus_ptr	= &init_task.cpus_mask,
+	.cpus_mask	= CPU_MASK_ALL,
 	.nr_cpus_allowed= NR_CPUS,
 	.cpus_requested	= CPU_MASK_ALL,
 	.mm		= NULL,
@@ -93,6 +94,9 @@ struct task_struct init_task
 #endif
 #ifdef CONFIG_CGROUP_SCHED
 	.sched_task_group = &root_task_group,
+#endif
+#ifdef CONFIG_SCHED_TUNE
+	.stune_idx	= 0,
 #endif
 	.ptraced	= LIST_HEAD_INIT(init_task.ptraced),
 	.ptrace_entry	= LIST_HEAD_INIT(init_task.ptrace_entry),
@@ -167,10 +171,13 @@ struct task_struct init_task
 	.softirqs_enabled = 1,
 #endif
 #ifdef CONFIG_LOCKDEP
+	.lockdep_depth = 0, /* no locks held yet */
+	.curr_chain_key = INITIAL_CHAIN_KEY,
 	.lockdep_recursion = 0,
 #endif
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	.ret_stack	= NULL,
+	.ret_stack		= NULL,
+	.tracing_graph_pause	= ATOMIC_INIT(0),
 #endif
 #if defined(CONFIG_TRACING) && defined(CONFIG_PREEMPT)
 	.trace_recursion = 0,

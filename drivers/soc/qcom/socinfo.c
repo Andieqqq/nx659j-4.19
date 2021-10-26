@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2009-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2009-2021, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
@@ -53,6 +53,14 @@ enum {
 	HW_PLATFORM_RCM	= 21,
 	HW_PLATFORM_STP = 23,
 	HW_PLATFORM_SBC = 24,
+
+	HW_PLATFORM_J1  = 36,
+	HW_PLATFORM_J11 = 37,
+	HW_PLATFORM_J1S = 41,
+	HW_PLATFORM_J3S = 42,
+	HW_PLATFORM_J2  = 43,
+	HW_PLATFORM_K11A = 44,
+	HW_PLATFORM_J2S = 45,
 	HW_PLATFORM_HDK = 31,
 	HW_PLATFORM_IDP = 34,
 	HW_PLATFORM_INVALID
@@ -75,6 +83,13 @@ const char *hw_platform[] = {
 	[HW_PLATFORM_DTV] = "DTV",
 	[HW_PLATFORM_STP] = "STP",
 	[HW_PLATFORM_SBC] = "SBC",
+	[HW_PLATFORM_J2] = "UMI",
+	[HW_PLATFORM_J1] = "CMI",
+	[HW_PLATFORM_J11] = "LMI",
+	[HW_PLATFORM_J1S] = "CAS",
+	[HW_PLATFORM_J3S] = "APOLLO",
+	[HW_PLATFORM_K11A] = "ALIOTH",
+	[HW_PLATFORM_J2S] = "THYME",
 	[HW_PLATFORM_HDK] = "HDK",
 	[HW_PLATFORM_IDP] = "IDP"
 };
@@ -320,8 +335,9 @@ static struct msm_soc_info cpu_of_id[] = {
 	[365] = {MSM_CPU_SDMMAGPIE, "SDMMAGPIE"},
 
 	/* kona ID */
-	[356] = {MSM_CPU_KONA, "KONA"},
+	[356] = {MSM_CPU_KONA, "SM8250"},
 	[455] = {MSM_CPU_KONA, "KONA"},
+	[496] = {MSM_CPU_KONA, "KONA"},
 
 	/* Lito ID */
 	[400] = {MSM_CPU_LITO, "LITO"},
@@ -333,6 +349,9 @@ static struct msm_soc_info cpu_of_id[] = {
 	/* Bengal ID */
 	[417] = {MSM_CPU_BENGAL, "BENGAL"},
 	[444] = {MSM_CPU_BENGAL, "BENGAL"},
+
+	/* Khaje ID */
+	[518] = {MSM_CPU_KHAJE, "KHAJE"},
 
 	/* Lagoon ID */
 	[434] = {MSM_CPU_LAGOON, "LAGOON"},
@@ -355,6 +374,31 @@ static struct msm_soc_info cpu_of_id[] = {
 
 	/* BENGALP-IOT ID */
 	[470] = {MSM_CPU_BENGALP_IOT, "BENGALP-IOT"},
+
+	/* MSM8937 ID */
+	[294] = {MSM_CPU_8937, "MSM8937"},
+	[295] = {MSM_CPU_8937, "APQ8937"},
+
+	/* MSM8917 IDs */
+	[303] = {MSM_CPU_8917, "MSM8917"},
+	[307] = {MSM_CPU_8917, "APQ8017"},
+	[308] = {MSM_CPU_8917, "MSM8217"},
+	[309] = {MSM_CPU_8917, "MSM8617"},
+
+	/* SDM429 and SDM439 ID */
+	[353] = {MSM_CPU_SDM439, "SDM439"},
+	[354] = {MSM_CPU_SDM429, "SDM429"},
+
+
+	/* QM215 ID */
+	[386] = {MSM_CPU_QM215, "QM215"},
+
+	/* 8953 ID */
+	[293] = {MSM_CPU_8953, "MSM8953"},
+	[304] = {MSM_CPU_8953, "APQ8053"},
+
+	/* SDM450 ID */
+	[338] = {MSM_CPU_SDM450, "SDM450"},
 
 	/* Uninitialized IDs are not known to run Linux.
 	 * MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -1235,6 +1279,10 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 417;
 		strlcpy(dummy_socinfo.build_id, "bengal - ",
 		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_khaje()) {
+		dummy_socinfo.id = 518;
+		strlcpy(dummy_socinfo.build_id, "khaje - ",
+		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_bengalp()) {
 		dummy_socinfo.id = 445;
 		strlcpy(dummy_socinfo.build_id, "bengalp - ",
@@ -1283,6 +1331,34 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 470;
 		strlcpy(dummy_socinfo.build_id, "bengalp-iot - ",
 		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_msm8937()) {
+		dummy_socinfo.id = 294;
+		strlcpy(dummy_socinfo.build_id, "msm8937 - ",
+		sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_msm8917()) {
+		dummy_socinfo.id = 303;
+		strlcpy(dummy_socinfo.build_id, "msm8917 - ",
+			sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sdm439()) {
+		dummy_socinfo.id = 353;
+		strlcpy(dummy_socinfo.build_id, "sdm439 - ",
+				sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sdm429()) {
+		dummy_socinfo.id = 354;
+		strlcpy(dummy_socinfo.build_id, "sdm429 - ",
+				sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_qm215()) {
+		dummy_socinfo.id = 386;
+		strlcpy(dummy_socinfo.build_id, "qm215 - ",
+				sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_msm8953()) {
+		dummy_socinfo.id = 293;
+		strlcpy(dummy_socinfo.build_id, "msm8953 - ",
+			sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sdm450()) {
+		dummy_socinfo.id = 338;
+		strlcpy(dummy_socinfo.build_id, "sdm450 - ",
+			sizeof(dummy_socinfo.build_id));
 	} else
 		strlcat(dummy_socinfo.build_id, "Dummy socinfo",
 			sizeof(dummy_socinfo.build_id));
@@ -1620,6 +1696,76 @@ static void socinfo_select_format(void)
 		socinfo_format = socinfo->v0_1.format;
 	}
 }
+
+const char *product_name_get(void)
+{
+	char *product_name = NULL;
+	size_t size;
+	uint32_t hw_type;
+
+	hw_type = socinfo_get_platform_type();
+
+	product_name = qcom_smem_get(QCOM_SMEM_HOST_ANY, SMEM_ID_VENDOR1, &size);
+	if (IS_ERR_OR_NULL(product_name)) {
+		pr_warn("Can't find SMEM_ID_VENDOR1; falling back on dummy values.\n");
+		return hw_platform[hw_type];
+	}
+
+	return product_name;
+}
+
+EXPORT_SYMBOL(product_name_get);
+
+uint32_t get_hw_country_version(void)
+{
+	uint32_t version = socinfo_get_platform_version();
+	return (version & HW_COUNTRY_VERSION_MASK) >> HW_COUNTRY_VERSION_SHIFT;
+}
+
+EXPORT_SYMBOL(get_hw_country_version);
+
+uint32_t get_hw_version_platform(void)
+{
+	uint32_t hw_type = socinfo_get_platform_type();
+	if (hw_type == HW_PLATFORM_J2)
+		return HARDWARE_PLATFORM_UMI;
+	if (hw_type == HW_PLATFORM_J1)
+		return HARDWARE_PLATFORM_CMI;
+	if (hw_type == HW_PLATFORM_J11)
+		return HARDWARE_PLATFORM_LMI;
+	if (hw_type == HW_PLATFORM_J1S)
+		return HARDWARE_PLATFORM_CAS;
+	if (hw_type == HW_PLATFORM_J3S)
+		return HARDWARE_PLATFORM_APOLLO;
+	if (hw_type == HW_PLATFORM_K11A)
+		return HARDWARE_PLATFORM_ALIOTH;
+        if (hw_type == HW_PLATFORM_J2S)
+                return HARDWARE_PLATFORM_THYME;
+	else
+		return HARDWARE_PLATFORM_UNKNOWN;
+}
+EXPORT_SYMBOL(get_hw_version_platform);
+
+uint32_t get_hw_version_major(void)
+{
+	uint32_t version = socinfo_get_platform_version();
+	return (version & HW_MAJOR_VERSION_MASK) >> HW_MAJOR_VERSION_SHIFT;
+}
+EXPORT_SYMBOL(get_hw_version_major);
+
+uint32_t get_hw_version_minor(void)
+{
+	uint32_t version = socinfo_get_platform_version();
+	return (version & HW_MINOR_VERSION_MASK) >> HW_MINOR_VERSION_SHIFT;
+}
+EXPORT_SYMBOL(get_hw_version_minor);
+
+uint32_t get_hw_version_build(void)
+{
+	uint32_t version = socinfo_get_platform_version();
+	return (version & HW_BUILD_VERSION_MASK) >> HW_BUILD_VERSION_SHIFT;
+}
+EXPORT_SYMBOL(get_hw_version_build);
 
 int __init socinfo_init(void)
 {

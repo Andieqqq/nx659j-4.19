@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2010-2011, 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2011, 2020-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/of.h>
@@ -295,6 +295,13 @@ static int pm8xxx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 		return rc;
 	}
 
+	rc = regmap_bulk_read(rtc_dd->regmap, regs->alarm_ctrl, value, 1);
+	if (rc) {
+		dev_err(dev, "Read from ALARM CTRL failed\n");
+		return rc;
+	}
+	alarm->enabled = !!(value[0] & PM8xxx_RTC_ENABLE);
+
 	dev_dbg(dev, "Alarm set for - h:r:s=%d:%d:%d, d/m/y=%d/%d/%d\n",
 		alarm->time.tm_hour, alarm->time.tm_min,
 		alarm->time.tm_sec, alarm->time.tm_mday,
@@ -470,6 +477,16 @@ static const struct pm8xxx_rtc_regs pmk8350_regs = {
 	.alarm_en	= BIT(7),
 };
 
+static const struct pm8xxx_rtc_regs pm8916_regs = {
+	.ctrl		= 0x6046,
+	.write		= 0x6040,
+	.read		= 0x6048,
+	.alarm_rw	= 0x6140,
+	.alarm_ctrl	= 0x6146,
+	.alarm_ctrl2	= 0x6148,
+	.alarm_en	= BIT(7),
+};
+
 /*
  * Hardcoded RTC bases until IORESOURCE_REG mapping is figured out
  */
@@ -479,20 +496,10 @@ static const struct of_device_id pm8xxx_id_table[] = {
 	{ .compatible = "qcom,pm8058-rtc", .data = &pm8058_regs },
 	{ .compatible = "qcom,pm8941-rtc", .data = &pm8941_regs },
 	{ .compatible = "qcom,pmk8350-rtc", .data = &pmk8350_regs },
+	{ .compatible = "qcom,pm8916-rtc", .data = &pm8916_regs },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, pm8xxx_id_table);
-
-
-//Begin [ljz add the kernel power code,20200615]
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-static time_t rtc_suspend_sec = 0;
-static time_t rtc_resume_sec = 0;
-static unsigned long all_sleep_time = 0;
-static unsigned long all_wake_time = 0;
-#endif //CONFIG_ZTEMT_POWER_DEBUG
-//End [ljz add the kernel power code,20200615]
-
 
 static int pm8xxx_rtc_probe(struct platform_device *pdev)
 {
@@ -566,65 +573,19 @@ static int pm8xxx_rtc_resume(struct device *dev)
 {
 	struct pm8xxx_rtc *rtc_dd = dev_get_drvdata(dev);
 
-//Begin [ljz add the kernel power code,20200615]
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-	int rc, diff=0;
-	struct rtc_time tm;
-	unsigned long now;
-#endif //CONFIG_ZTEMT_POWER_DEBUG
-//End  [ljz add the kernel power code,20200615]
-       
-
 	if (device_may_wakeup(dev))
 		disable_irq_wake(rtc_dd->rtc_alarm_irq);
-	
-//Begin [ljz add the kernel power code,20200615]
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-	rc = pm8xxx_rtc_read_time(dev,&tm);
-	if (rc) {
-		printk("%s: Unable to read from RTC\n", __func__);
-	}
-	rtc_tm_to_time(&tm, &now);
-	rtc_resume_sec = now;
-	diff = rtc_resume_sec - rtc_suspend_sec;
-	all_sleep_time += diff;
-	printk("I have sleep %d seconds all_sleep_time %lu seconds\n",diff,all_sleep_time);
-#endif //CONFIG_ZTEMT_POWER_DEBUG
-//End   [ljz add the kernel power code,20200615]
 
-	
 	return 0;
 }
 
 static int pm8xxx_rtc_suspend(struct device *dev)
 {
-//Begin [ljz add the kernel power code,20200615]
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-	int rc, diff=0;
-	struct rtc_time tm;
-	unsigned long now;
-#endif
-//End [ljz add the kernel power code,20200615]
-	
 	struct pm8xxx_rtc *rtc_dd = dev_get_drvdata(dev);
 
 	if (device_may_wakeup(dev))
 		enable_irq_wake(rtc_dd->rtc_alarm_irq);
 
-//Begin [ljz add the kernel power code,20200615]
-#ifdef CONFIG_ZTEMT_POWER_DEBUG
-	rc = pm8xxx_rtc_read_time(dev,&tm);
-	if(rc) {
-		printk("%s: Unable to read from RTC\n", __func__);
-	}
-	rtc_tm_to_time(&tm, &now);
-	rtc_suspend_sec = now;
-	diff = rtc_suspend_sec - rtc_resume_sec;
-	all_wake_time += diff;
-	printk("I have work %d seconds all_wake_time %lu seconds\n",diff,all_wake_time);
-#endif
-//End [ljz add the kernel power code,20200615]
-	
 	return 0;
 }
 #endif

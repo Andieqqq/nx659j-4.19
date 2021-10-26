@@ -97,12 +97,12 @@ int ion_heap_map_user(struct ion_heap *heap, struct ion_buffer *buffer,
 
 static int ion_heap_clear_pages(struct page **pages, int num, pgprot_t pgprot)
 {
-	void *addr = vm_map_ram(pages, num, -1, pgprot);
+	void *addr = vmap(pages, num, VM_MAP, pgprot);
 
 	if (!addr)
 		return -ENOMEM;
 	memset(addr, 0, PAGE_SIZE * num);
-	vm_unmap_ram(addr, num);
+	vunmap(addr);
 
 	return 0;
 }
@@ -347,6 +347,11 @@ struct ion_heap *ion_heap_create(struct ion_platform_heap *heap_data)
 	case (enum ion_heap_type)ION_HEAP_TYPE_SECURE_CARVEOUT:
 		heap = ion_secure_carveout_heap_create(heap_data);
 		break;
+#ifdef CONFIG_ION_CAMERA_HEAP
+	case (enum ion_heap_type)ION_HEAP_TYPE_CAMERA:
+		heap = ion_camera_heap_create(heap_data);
+		break;
+#endif
 	default:
 		pr_err("%s: Invalid heap type %d\n", __func__,
 		       heap_data->type);

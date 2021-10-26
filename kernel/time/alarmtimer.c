@@ -30,6 +30,7 @@
 #include <linux/compat.h>
 #include <linux/module.h>
 
+
 #include "posix-timers.h"
 
 #define CREATE_TRACE_POINTS
@@ -167,6 +168,10 @@ static void alarmtimer_enqueue(struct alarm_base *base, struct alarm *alarm)
 	if (alarm->state & ALARMTIMER_STATE_ENQUEUED)
 		timerqueue_del(&base->timerqueue, &alarm->node);
 
+	pr_info("alarmtimer_enqueue: comm:%s pid:%d exp:%llu func:%pf\n",
+		current->comm, current->pid,
+		ktime_to_ms(alarm->node.expires), alarm->function);
+		//WARN(1, "alarmtimer_enqueue:   %llu", ktime_to_ms(alarm->node.expires));
 	timerqueue_add(&base->timerqueue, &alarm->node);
 	alarm->state |= ALARMTIMER_STATE_ENQUEUED;
 }
@@ -211,6 +216,7 @@ static enum hrtimer_restart alarmtimer_fired(struct hrtimer *timer)
 	alarmtimer_dequeue(base, alarm);
 	spin_unlock_irqrestore(&base->lock, flags);
 
+	pr_info("[oem][alarm]: type=%d, func=%pf\n", alarm->type, alarm->function);
 	if (alarm->function)
 		restart = alarm->function(alarm, base->gettime());
 
@@ -252,6 +258,7 @@ static int alarmtimer_suspend(struct device *dev)
 	struct rtc_device *rtc;
 	unsigned long flags;
 	struct rtc_time tm;
+	struct alarm *min_timer = NULL;
 
 	spin_lock_irqsave(&freezer_delta_lock, flags);
 	min = freezer_delta;
@@ -278,6 +285,7 @@ static int alarmtimer_suspend(struct device *dev)
 			continue;
 		delta = ktime_sub(next->expires, base->gettime());
 		if (!min || (delta < min)) {
+			min_timer = (struct alarm *)next;
 			expires = next->expires;
 			min = delta;
 			type = i;
@@ -286,10 +294,8 @@ static int alarmtimer_suspend(struct device *dev)
 	if (min == 0)
 		return 0;
 
-	if (ktime_to_ns(min) < 2 * NSEC_PER_SEC) {
-		__pm_wakeup_event(ws, 2 * MSEC_PER_SEC);
-		return -EBUSY;
-	}
+	if (ktime_to_ns(min) < NSEC_PER_SEC / 2)
+		__pm_wakeup_event(ws, MSEC_PER_SEC / 2);
 
 	trace_alarmtimer_suspend(expires, type);
 
@@ -822,9 +828,9 @@ static int alarm_timer_nsleep(const clockid_t which_clock, int flags,
 	if (flags == TIMER_ABSTIME)
 		return -ERESTARTNOHAND;
 
-	restart->fn = alarm_timer_nsleep_restart;
 	restart->nanosleep.clockid = type;
 	restart->nanosleep.expires = exp;
+	set_restart_fn(restart, alarm_timer_nsleep_restart);
 	return ret;
 }
 
@@ -895,6 +901,7 @@ static int __init alarmtimer_init(void)
 		error = PTR_ERR(pdev);
 		goto out_drv;
 	}
+
 	return 0;
 
 out_drv:

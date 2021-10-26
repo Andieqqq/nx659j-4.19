@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -108,18 +108,11 @@ static int cam_eeprom_read_memory(struct cam_eeprom_ctrl_t *e_ctrl,
 				emap[j].mem.addr_type,
 				emap[j].mem.data_type,
 				emap[j].mem.valid_size);
-			if (rc < 0) {
+			if (rc) {
 				CAM_ERR(CAM_EEPROM, "read failed rc %d",
 					rc);
 				return rc;
 			}
-			//CAM_ERR(CAM_EEPROM,"eeprom_name = %s 0x%x 0x%x",e_ctrl->device_name,e_ctrl->io_master_info.cci_client->sid,e_ctrl->io_master_info.cci_client->cci_i2c_master);
-			/*ZTEMT: kangxiong  add for 3D test eeprom write--------Start*/
-			if (e_ctrl->io_master_info.cci_client->sid == 0x56&&e_ctrl->io_master_info.cci_client->cci_i2c_master==0x01)
-			{
-			    cam_nubia_eeprom_io_init(e_ctrl->io_master_info);
-			}
-			/*ZTEMT: kangxiong add for 3D test eeprom write--------End*/
 			memptr += emap[j].mem.valid_size;
 		}
 

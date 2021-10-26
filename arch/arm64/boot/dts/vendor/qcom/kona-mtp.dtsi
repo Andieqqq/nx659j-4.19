@@ -3,7 +3,7 @@
 
 #include "kona-pmic-overlay.dtsi"
 #include "kona-sde-display.dtsi"
-//#include "camera/kona-camera-sensor-mtp.dtsi"
+#include "camera/kona-camera-sensor-mtp.dtsi"
 #include "kona-audio-overlay.dtsi"
 #include "kona-thermal-overlay.dtsi"
 
@@ -20,40 +20,27 @@
 };
 
 &dai_mi2s2 {
-	qcom,msm-mi2s-rx-lines = <1>;
-	qcom,msm-mi2s-tx-lines = <2>;
-	pinctrl-names = "default", "sleep";
-	pinctrl-0 = <&tert_mi2s_sck_active &tert_mi2s_ws_active
-			&tert_mi2s_sd0_active &tert_mi2s_sd1_active>;
-	pinctrl-1 = <&tert_mi2s_sck_sleep &tert_mi2s_ws_sleep
-			&tert_mi2s_sd0_sleep &tert_mi2s_sd1_sleep>;
+	qcom,msm-mi2s-tx-lines = <1>;
 };
 
-&qupv3_se16_i2c {
-	status = "ok";
-	
-	spkamp@3a {/* max98927 smartpa device*/
-		compatible = "maxim,max98927R";
-		status = "okay";
-		reg = <0x3a>;
-		mono_stereo_mode = <3>;
-		interleave_mode = <1>;
-		maxim,98927-reset-gpio = <&tlmm 131 0>;
+&q6core {
+	cdc_tert_mi2s_gpios: msm_cdc_pinctrl_tert {
+		compatible = "qcom,msm-cdc-pinctrl";
+		pinctrl-names = "aud_active", "aud_sleep";
+		pinctrl-0 = <&tert_mi2s_sck_active &tert_mi2s_ws_active
+				&tert_mi2s_sd0_active>;
+		pinctrl-1 = <&tert_mi2s_sck_sleep &tert_mi2s_ws_sleep
+				&tert_mi2s_sd0_sleep>;
 	};
-	
-	spkamp@39 {/* max98927 smartpa device*/
-		compatible = "maxim,max98927L";
-		status = "okay";
-		reg = <0x39>;
-		mono_stereo_mode = <3>;
-		interleave_mode = <1>;
-		maxim,98927-reset-gpio = <&tlmm 63 0>;
-	};
+};
+
+&kona_snd {
+	qcom,tert-mi2s-gpios = <&cdc_tert_mi2s_gpios>;
 };
 
 &qupv3_se1_i2c {
 	status = "ok";
-	qcom,clk-freq-out = <400000>;
+	qcom,clk-freq-out = <1000000>;
 	#address-cells = <1>;
 	#size-cells = <0>;
 	nq@28 {
@@ -127,7 +114,7 @@
 
 	qcom,qbt_handler {
 		compatible = "qcom,qbt-handler";
-		/*qcom,ipc-gpio = <&tlmm 23 0>;*/
+		qcom,ipc-gpio = <&tlmm 23 0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&key_home_default>;
 		qcom,finger-detect-gpio = <&pm8150_gpios 1 0>;
@@ -168,6 +155,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&bt_en_sleep>;
 		qca,bt-reset-gpio = <&tlmm 21 0>; /* BT_EN */
+		qca,wl-reset-gpio = <&tlmm 20 0>; /* WL_EN */
+		qca,bt-sw-ctrl-gpio = <&tlmm 124 0>; /* SW_CTRL */
 		qca,bt-vdd-aon-supply = <&pm8150_s6>;
 		qca,bt-vdd-dig-supply = <&pm8009_s2>;
 		qca,bt-vdd-rfa1-supply = <&pm8150_s5>;
@@ -187,13 +176,12 @@
 		qcom,batt-id-range-pct = <15>;
 		#include "fg-gen4-batterydata-alium-3600mah.dtsi"
 		#include "fg-gen4-batterydata-ascent-3450mah.dtsi"
-		//#include "fg-gen4-batterydata-alium-3600mah-nubia.dtsi"
 	};
 
 	extcon_usb1: extcon_usb1 {
 		compatible = "linux,extcon-usb-gpio";
 		vbus-gpio = <&pm8150_gpios 10 GPIO_ACTIVE_HIGH>;
-		id-gpio = <&tlmm 84 GPIO_ACTIVE_HIGH>;
+		id-gpio = <&tlmm 91 GPIO_ACTIVE_HIGH>;
 		vbus-out-gpio = <&pm8150_gpios 9 GPIO_ACTIVE_HIGH>;
 
 		pinctrl-names = "default";
@@ -256,7 +244,7 @@
 
 &pm8150b_charger {
 	status = "ok";
-	qcom,sec-charger-config = <0>;
+	qcom,sec-charger-config = <1>;
 	qcom,auto-recharge-soc = <98>;
 	io-channels = <&pm8150b_vadc ADC_MID_CHG_DIV6>,
 		      <&pm8150b_vadc ADC_USB_IN_I>,
@@ -285,7 +273,6 @@
 	qcom,five-pin-battery;
 	qcom,cl-wt-enable;
 	qcom,soc-scale-mode-en;
-	qcom,fg-force-load-profile;//add by nubia
 	qcom,force-calib-level = <130>;
 	/* ESR fast calibration */
 	qcom,fg-esr-timer-chg-fast = <0 7>;
@@ -295,6 +282,41 @@
 	qcom,fg-esr-cal-soc-thresh = <26 230>;
 	qcom,fg-esr-cal-temp-thresh = <10 40>;
 };
+
+&qupv3_se15_i2c {
+	#address-cells = <1>;
+	#size-cells = <0>;
+#include "smb1390.dtsi"
+
+	halo,hl6111r@25 {
+		compatible = "halo,hl6111r";
+		reg = <0x25>;
+		status = "ok";
+	};
+};
+
+&smb1390 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&smb_stat_default>;
+	status = "ok";
+};
+
+&smb1390_charger {
+	io-channels = <&pm8150b_vadc ADC_AMUX_THM2>;
+	io-channel-names = "cp_die_temp";
+	qcom,parallel-output-mode = <2>;
+	qcom,min-ilim-ua = <750000>;
+	status = "ok";
+};
+
+&smb1390_slave {
+	status = "ok";
+};
+
+&smb1390_slave_charger {
+	status = "ok";
+};
+
 &pm8150_vadc {
 	#address-cells = <1>;
 	#size-cells = <0>;
@@ -438,45 +460,6 @@
 	status = "ok";
 };
 
-&dsi_r66455_1080p_amoled_cmd {
-	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
-	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
-	qcom,mdss-dsi-bl-min-level = <1>;
-	qcom,mdss-dsi-bl-max-level = <4095>;
-	qcom,mdss-brightness-max-level = <4095>;
-	qcom,platform-te-gpio = <&tlmm 66 0>;
-	qcom,platform-reset-gpio = <&tlmm 75 0>;
-	//qcom,mdss-dsi-panel-test-pin = <&tlmm 46 0>;
-	//qcom,panel-mode-gpio  = <&tlmm 46 0>;
-	qcom,platform-lhbm-gpio = <&tlmm 46 0>;
-};
-
-&dsi_r66451_1080p_amoled_cmd {
-       qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
-       qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
-       qcom,mdss-dsi-bl-min-level = <1>;
-       qcom,mdss-dsi-bl-max-level = <4095>;
-       qcom,mdss-brightness-max-level = <4095>;
-       qcom,platform-te-gpio = <&tlmm 66 0>;
-       qcom,platform-reset-gpio = <&tlmm 75 0>;
-       //qcom,mdss-dsi-panel-test-pin = <&tlmm 46 0>;
-       //qcom,panel-mode-gpio  = <&tlmm 46 0>;
-	   qcom,platform-lhbm-gpio = <&tlmm 46 0>;
-};
-
-&dsi_r66451_1080p_amoled_new_cmd {
-       qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
-       qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
-       qcom,mdss-dsi-bl-min-level = <1>;
-       qcom,mdss-dsi-bl-max-level = <4095>;
-       qcom,mdss-brightness-max-level = <4095>;
-       qcom,platform-te-gpio = <&tlmm 66 0>;
-       qcom,platform-reset-gpio = <&tlmm 75 0>;
-       //qcom,mdss-dsi-panel-test-pin = <&tlmm 46 0>;
-       //qcom,panel-mode-gpio  = <&tlmm 46 0>;
-	   qcom,platform-lhbm-gpio = <&tlmm 46 0>;
-};
-
 &dsi_sw43404_amoled_cmd {
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
@@ -485,8 +468,7 @@
 	qcom,mdss-brightness-max-level = <255>;
 	qcom,platform-te-gpio = <&tlmm 66 0>;
 	qcom,platform-reset-gpio = <&tlmm 75 0>;
-	//qcom,mdss-dsi-panel-test-pin = <&tlmm 46 0>;
-	qcom,panel-mode-gpio  = <&tlmm 46 0>;
+	qcom,mdss-dsi-panel-test-pin = <&tlmm 46 0>;
 };
 
 &dsi_sw43404_amoled_video {
@@ -564,7 +546,7 @@
 };
 
 &sde_dsi {
-	//qcom,dsi-default-panel = <&dsi_sw43404_amoled_cmd>;
+	qcom,dsi-default-panel = <&dsi_sw43404_amoled_cmd>;
 };
 
 &thermal_zones {
@@ -587,11 +569,7 @@
 		polling-delay-passive = <0>;
 		polling-delay = <0>;
 		thermal-governor = "user_space";
-		//Begin [0016004715,fix the xo-therm-usr read value problem,20200303]
-		//pm8150_adc_tm is the PM8250
-		//thermal-sensors = <&pm8150_adc_tm ADC_XO_THERM_PU2>;
-		thermal-sensors = <&pm8150l_adc_tm ADC_AMUX_THM1_PU2>;
-		//End [0016004715,fix the xo-therm-usr read value problem,20200303]
+		thermal-sensors = <&pm8150_adc_tm ADC_XO_THERM_PU2>;
 		wake-capable-sensor;
 		trips {
 			active-config0 {
@@ -676,38 +654,17 @@
 			};
 		};
 	};
-	//Begin [0016004715,fix the FFBM mode switch to androdi mode exception,20190107]
-	gpu-skin-avg-step {
-		polling-delay-passive = <1000>;
-		polling-delay = <5000>;
-		thermal-governor = "step_wise";
-		trips {
-			virt_trip: virt-trip {
-				temperature = <125000>;
-				hysteresis = <2000>;
-				type = "passive";
-			};
-		};
-
-		cooling-maps {
-			gpu_cdev {
-				trip = <&virt_trip>;
-				cooling-device = <&msm_gpu 0 1>;
-			};
-		};
-	};
-	//End   [0016004715,fix the FFBM mode switch to androdi mode exception,20190107]
 };
 
 &sdhc_2 {
 	vdd-supply = <&pm8150a_l9>;
 	qcom,vdd-voltage-level = <2950000 2960000>;
 	qcom,vdd-current-level = <200 800000>;
-   //Begin [0016004715,fix the smartfan pm8150a_l6 has reuse problem in sdcard,20191022]
-	//vdd-io-supply = <&pm8150a_l6>;
-	//qcom,vdd-io-voltage-level = <1808000 2960000>;
-	//qcom,vdd-io-current-level = <200 22000>;
-     //End [0016004715,fix the smartfan pm8150a_l6 has reuse problem in sdcard,20191022]
+
+	vdd-io-supply = <&pm8150a_l6>;
+	qcom,vdd-io-voltage-level = <1808000 2960000>;
+	qcom,vdd-io-current-level = <200 22000>;
+
 	pinctrl-names = "active", "sleep";
 	pinctrl-0 = <&sdc2_clk_on  &sdc2_cmd_on &sdc2_data_on &storage_cd>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off &storage_cd>;

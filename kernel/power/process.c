@@ -22,7 +22,6 @@
 #include <linux/kmod.h>
 #include <trace/events/power.h>
 #include <linux/cpuset.h>
-#include <linux/wakeup_reason.h>
 
 /*
  * Timeout for stopping processes
@@ -39,9 +38,6 @@ static int try_to_freeze_tasks(bool user_only)
 	unsigned int elapsed_msecs;
 	bool wakeup = false;
 	int sleep_usecs = USEC_PER_MSEC;
-#ifdef CONFIG_PM_SLEEP
-	char suspend_abort[MAX_SUSPEND_ABORT_LEN];
-#endif
 
 	start = ktime_get_boottime();
 
@@ -71,11 +67,6 @@ static int try_to_freeze_tasks(bool user_only)
 			break;
 
 		if (pm_wakeup_pending()) {
-#ifdef CONFIG_PM_SLEEP
-			pm_get_active_wakeup_sources(suspend_abort,
-				MAX_SUSPEND_ABORT_LEN);
-			log_suspend_abort_reason(suspend_abort);
-#endif
 			wakeup = true;
 			break;
 		}
@@ -155,6 +146,7 @@ int freeze_processes(void)
 	pr_cont("\n");
 	BUG_ON(in_atomic());
 
+#ifndef CONFIG_ANDROID
 	/*
 	 * Now that the whole userspace is frozen we need to disbale
 	 * the OOM killer to disallow any further interference with
@@ -163,6 +155,7 @@ int freeze_processes(void)
 	 */
 	if (!error && !oom_killer_disable(msecs_to_jiffies(freeze_timeout_msecs)))
 		error = -EBUSY;
+#endif
 
 	if (error)
 		thaw_processes();
@@ -207,7 +200,9 @@ void thaw_processes(void)
 	pm_freezing = false;
 	pm_nosig_freezing = false;
 
+#ifndef CONFIG_ANDROID
 	oom_killer_enable();
+#endif
 
 	pr_info("Restarting tasks ... ");
 

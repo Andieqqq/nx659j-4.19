@@ -23,11 +23,14 @@ KCOV_INSTRUMENT_vmstat.o := n
 
 mmu-y			:= nommu.o
 mmu-$(CONFIG_MMU)	:= gup.o highmem.o memory.o mincore.o \
-			   mlock.o mmap.o mprotect.o mremap.o msync.o \
-			   page_vma_mapped.o pagewalk.o pgtable-generic.o \
-			   rmap.o vmalloc.o
+			   mlock.o mmap.o mmu_gather.o mprotect.o mremap.o \
+			   msync.o page_vma_mapped.o pagewalk.o \
+			   pgtable-generic.o rmap.o vmalloc.o
 
 
+ifdef CONFIG_MM_EVENT_STAT
+mmu-$(CONFIG_MMU)	+= mm_event.o
+endif
 ifdef CONFIG_CROSS_MEMORY_ATTACH
 mmu-$(CONFIG_MMU)	+= process_vm_access.o
 endif
@@ -102,8 +105,9 @@ obj-$(CONFIG_IDLE_PAGE_TRACKING) += page_idle.o
 obj-$(CONFIG_FRAME_VECTOR) += frame_vector.o
 obj-$(CONFIG_DEBUG_PAGE_REF) += debug_page_ref.o
 obj-$(CONFIG_HARDENED_USERCOPY) += usercopy.o
-CFLAGS_kmemleak.o += -DCONFIG_DEBUG_FS
 obj-$(CONFIG_PERCPU_STATS) += percpu-stats.o
 obj-$(CONFIG_HMM) += hmm.o
 obj-$(CONFIG_MEMFD_CREATE) += memfd.o
 obj-$(CONFIG_PROCESS_RECLAIM)	+= process_reclaim.o
+
+CFLAGS_kmemleak.o += -DCONFIG_DEBUG_FS

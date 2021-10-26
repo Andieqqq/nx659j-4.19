@@ -56,10 +56,6 @@
 #define SWRM_COL_02    02
 #define SWRM_COL_16    16
 
-#ifndef CONFIG_DEBUG_FS
-#define CONFIG_DEBUG_FS
-#endif
-
 #define SWR_OVERFLOW_RETRY_COUNT 30
 
 /* pm runtime auto suspend timer in msecs */
@@ -143,6 +139,7 @@ static u8 swrm_get_clk_div(int mclk_freq, int bus_clk_freq)
 
 	return div_val;
 }
+static int swrm_master_init(struct swr_mstr_ctrl *swrm);
 
 static bool swrm_is_msm_variant(int val)
 {
@@ -885,7 +882,7 @@ static int swrm_cmd_fifo_wr_cmd(struct swr_mstr_ctrl *swrm, u8 cmd_data,
 	 * skip delay if write is handled in platform driver.
 	 */
 	if(!swrm->write)
-		usleep_range(150, 155);
+		usleep_range(250, 255);
 	if (cmd_id == 0xF) {
 		/*
 		 * sleep for 10ms for MSM soundwire variant to allow broadcast
@@ -2076,10 +2073,6 @@ handle_irq:
 					 * as hw will mask host_irq at slave
 					 * but will not unmask it afterwards.
 					 */
-					//swrm_cmd_fifo_wr_cmd(swrm, 0xFF, devnum, 0x0,
-						//SWRS_SCP_INT_STATUS_CLEAR_1);
-					//swrm_cmd_fifo_wr_cmd(swrm, 0x4, devnum, 0x0,
-						//SWRS_SCP_INT_STATUS_MASK_1);
 					swrm->enable_slave_irq = true;
 				}
 				break;
@@ -2088,10 +2081,6 @@ handle_irq:
 					"%s: device %d got attached\n",
 					__func__, devnum);
 				/* enable host irq from slave device*/
-				//swrm_cmd_fifo_wr_cmd(swrm, 0xFF, devnum, 0x0,
-					//SWRS_SCP_INT_STATUS_CLEAR_1);
-				//swrm_cmd_fifo_wr_cmd(swrm, 0x4, devnum, 0x0,
-					//SWRS_SCP_INT_STATUS_MASK_1);
 				swrm->enable_slave_irq = true;
 				break;
 			case SWR_ALERT:
@@ -2116,12 +2105,16 @@ handle_irq:
 			dev_err(swrm->dev,
 				"%s: SWR read FIFO overflow fifo status 0x%x\n",
 				__func__, value);
+			swr_master_write(swrm, SWRM_COMP_SW_RESET, 0x01);
+			swrm_master_init(swrm);
 			break;
 		case SWRM_INTERRUPT_STATUS_RD_FIFO_UNDERFLOW:
 			value = swr_master_read(swrm, SWRM_CMD_FIFO_STATUS);
 			dev_err(swrm->dev,
 				"%s: SWR read FIFO underflow fifo status 0x%x\n",
 				__func__, value);
+			swr_master_write(swrm, SWRM_COMP_SW_RESET, 0x01);
+			swrm_master_init(swrm);
 			break;
 		case SWRM_INTERRUPT_STATUS_WR_CMD_FIFO_OVERFLOW:
 			value = swr_master_read(swrm, SWRM_CMD_FIFO_STATUS);
@@ -2129,6 +2122,8 @@ handle_irq:
 				"%s: SWR write FIFO overflow fifo status %x\n",
 				__func__, value);
 			swr_master_write(swrm, SWRM_CMD_FIFO_CMD, 0x1);
+			swr_master_write(swrm, SWRM_COMP_SW_RESET, 0x01);
+			swrm_master_init(swrm);
 			break;
 		case SWRM_INTERRUPT_STATUS_CMD_ERROR:
 			value = swr_master_read(swrm, SWRM_CMD_FIFO_STATUS);
@@ -2169,17 +2164,17 @@ handle_irq:
 		case SWRM_INTERRUPT_STATUS_CLK_STOP_FINISHED_V2:
 			break;
 		case SWRM_INTERRUPT_STATUS_EXT_CLK_STOP_WAKEUP:
-			if (swrm->state == SWR_MSTR_UP) {
+			if (swrm->state == SWR_MSTR_UP)
 				dev_dbg(swrm->dev,
 					"%s:SWR Master is already up\n",
 					__func__);
-			} else {
+			else {
 				dev_err_ratelimited(swrm->dev,
 					"%s: SWR wokeup during clock stop\n",
 					__func__);
-				/* It might be possible the slave device gets reset
-				 * and slave interrupt gets missed. So re-enable
-				 * Host IRQ and process slave pending
+				/* It might be possible the slave device gets
+				 * reset and slave interrupt gets missed. So
+				 * re-enable Host IRQ and process slave pending
 				 * interrupts, if any.
 				 */
 				swrm_enable_slave_irq(swrm);
@@ -2498,6 +2493,7 @@ static int swrm_master_init(struct swr_mstr_ctrl *swrm)
 
 	reg[len] = SWR_MSTR_RX_SWRM_CPU_INTERRUPT_EN;
 	value[len++] = swrm->intr_mask;
+
 	reg[len] = SWRM_COMP_CFG_ADDR;
 	value[len++] = 0x03;
 
@@ -2996,7 +2992,6 @@ static int swrm_runtime_resume(struct device *dev)
 	int ret = 0;
 	bool swrm_clk_req_err = false;
 	bool hw_core_err = false;
-	bool aud_core_err = false;
 	struct swr_master *mstr = &swrm->master;
 	struct swr_device *swr_dev;
 
@@ -3014,7 +3009,6 @@ static int swrm_runtime_resume(struct device *dev)
 	if (swrm_request_hw_vote(swrm, LPASS_AUDIO_CORE, true)) {
 		dev_err(dev, "%s:lpass audio hw enable failed\n",
 			__func__);
-		aud_core_err = true;
 	}
 
 	if ((swrm->state == SWR_MSTR_DOWN) ||
@@ -3100,8 +3094,6 @@ static int swrm_runtime_resume(struct device *dev)
 		swrm->state = SWR_MSTR_UP;
 	}
 exit:
-	if (!aud_core_err)
-		swrm_request_hw_vote(swrm, LPASS_AUDIO_CORE, false);
 	if (!hw_core_err)
 		swrm_request_hw_vote(swrm, LPASS_HW_CORE, false);
 	if (swrm_clk_req_err)
@@ -3125,7 +3117,6 @@ static int swrm_runtime_suspend(struct device *dev)
 	struct swr_mstr_ctrl *swrm = platform_get_drvdata(pdev);
 	int ret = 0;
 	bool hw_core_err = false;
-	bool aud_core_err = false;
 	struct swr_master *mstr = &swrm->master;
 	struct swr_device *swr_dev;
 	int current_state = 0;
@@ -3144,14 +3135,6 @@ static int swrm_runtime_suspend(struct device *dev)
 			__func__);
 		hw_core_err = true;
 	}
-	if (swrm_request_hw_vote(swrm, LPASS_AUDIO_CORE, true)) {
-		dev_err(dev, "%s:lpass audio hw enable failed\n",
-			__func__);
-		aud_core_err = true;
-	}
-
-	if (swrm_request_hw_vote(swrm, LPASS_AUDIO_CORE, true))
-		dev_err(dev, "%s:lpass audio hw enable failed\n", __func__);
 
 	if ((current_state == SWR_MSTR_UP) ||
 	    (current_state == SWR_MSTR_SSR)) {
@@ -3245,14 +3228,10 @@ static int swrm_runtime_suspend(struct device *dev)
 		}
 
 	}
-	if (swrm_request_hw_vote(swrm, LPASS_AUDIO_CORE, false))
-		dev_dbg(dev, "%s:lpass audio hw enable failed\n", __func__);
 	/* Retain  SSR state until resume */
 	if (current_state != SWR_MSTR_SSR)
 		swrm->state = SWR_MSTR_DOWN;
 exit:
-	if (!aud_core_err)
-		swrm_request_hw_vote(swrm, LPASS_AUDIO_CORE, false);
 	if (!hw_core_err)
 		swrm_request_hw_vote(swrm, LPASS_HW_CORE, false);
 	mutex_unlock(&swrm->reslock);

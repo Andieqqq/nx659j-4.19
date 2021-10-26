@@ -29,11 +29,14 @@
 #include <linux/percpu.h>
 #include <linux/slab.h>
 #include <linux/msm_rtb.h>
+#include <linux/wakeup_reason.h>
 
 #include <linux/irqchip.h>
 #include <linux/irqchip/arm-gic-common.h>
 #include <linux/irqchip/arm-gic-v3.h>
 #include <linux/irqchip/irq-partition-percpu.h>
+#include <linux/wakeup_reason.h>
+#include <linux/syscore_ops.h>
 
 #include <asm/cputype.h>
 #include <asm/exception.h>
@@ -343,6 +346,29 @@ static int gic_suspend(void)
 	return 0;
 }
 
+/*
+ * gic_show_pending_irq - Shows the pending interrupts
+ * Note: Interrupts should be disabled on the cpu from which
+ * this is called to get accurate list of pending interrupts.
+ */
+void gic_show_pending_irqs(void)
+{
+	void __iomem *base;
+	u32 pending, enabled;
+	unsigned int j;
+
+	base = gic_data.dist_base;
+	for (j = 0; j * 32 < gic_data.irq_nr; j++) {
+		enabled = readl_relaxed(base +
+					GICD_ISENABLER + j * 4);
+		pending = readl_relaxed(base +
+					GICD_ISPENDR + j * 4);
+		pr_err("Pending and enabled irqs[%d] %x %x\n", j,
+				pending, enabled);
+
+	}
+}
+
 static void gic_show_resume_irq(struct gic_chip_data *gic)
 {
 	unsigned int i;
@@ -415,50 +441,47 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 {
 	u32 irqnr;
 
-	do {
-		irqnr = gic_read_iar();
+	irqnr = gic_read_iar();
 
-		if (likely(irqnr > 15 && irqnr < 1020) || irqnr >= 8192) {
-			int err;
+	if (likely(irqnr > 15 && irqnr < 1020) || irqnr >= 8192) {
+		int err;
 
-			uncached_logk(LOGK_IRQ, (void *)(uintptr_t)irqnr);
-			if (static_branch_likely(&supports_deactivate_key))
-				gic_write_eoir(irqnr);
-			else
-				isb();
-
-			err = handle_domain_irq(gic_data.domain, irqnr, regs);
-			if (err) {
-				WARN_ONCE(true, "Unexpected interrupt received!\n");
-				if (static_branch_likely(&supports_deactivate_key)) {
-					if (irqnr < 8192)
-						gic_write_dir(irqnr);
-				} else {
-					gic_write_eoir(irqnr);
-				}
-			}
-			continue;
-		}
-		if (irqnr < 16) {
-			uncached_logk(LOGK_IRQ, (void *)(uintptr_t)irqnr);
+		if (static_branch_likely(&supports_deactivate_key))
 			gic_write_eoir(irqnr);
-			if (static_branch_likely(&supports_deactivate_key))
-				gic_write_dir(irqnr);
-#ifdef CONFIG_SMP
-			/*
-			 * Unlike GICv2, we don't need an smp_rmb() here.
-			 * The control dependency from gic_read_iar to
-			 * the ISB in gic_write_eoir is enough to ensure
-			 * that any shared data read by handle_IPI will
-			 * be read after the ACK.
-			 */
-			handle_IPI(irqnr, regs);
-#else
-			WARN_ONCE(true, "Unexpected SGI received!\n");
-#endif
-			continue;
+		else
+			isb();
+
+		err = handle_domain_irq(gic_data.domain, irqnr, regs);
+		if (err) {
+			WARN_ONCE(true, "Unexpected interrupt received!\n");
+			log_abnormal_wakeup_reason(
+					"unexpected HW IRQ %u", irqnr);
+			if (static_branch_likely(&supports_deactivate_key)) {
+				if (irqnr < 8192)
+					gic_write_dir(irqnr);
+			} else {
+				gic_write_eoir(irqnr);
+			}
 		}
-	} while (irqnr != ICC_IAR1_EL1_SPURIOUS);
+		return;
+	}
+	if (irqnr < 16) {
+		gic_write_eoir(irqnr);
+		if (static_branch_likely(&supports_deactivate_key))
+			gic_write_dir(irqnr);
+#ifdef CONFIG_SMP
+		/*
+		 * Unlike GICv2, we don't need an smp_rmb() here.
+		 * The control dependency from gic_read_iar to
+		 * the ISB in gic_write_eoir is enough to ensure
+		 * that any shared data read by handle_IPI will
+		 * be read after the ACK.
+		 */
+		handle_IPI(irqnr, regs);
+#else
+		WARN_ONCE(true, "Unexpected SGI received!\n");
+#endif
+	}
 }
 
 static void __init gic_dist_init(void)

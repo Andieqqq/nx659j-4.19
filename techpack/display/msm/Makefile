@@ -22,7 +22,6 @@ msm_drm-$(CONFIG_DRM_MSM_DP) += dp/dp_usbpd.o \
 	dp/dp_drm.o \
 	dp/dp_hdcp2p2.o \
 	dp/dp_mst_drm.o \
-	dp/nubia_dp_preference.o\
 
 msm_drm-$(CONFIG_DRM_MSM_SDE) += sde/sde_crtc.o \
 	sde/sde_encoder.o \
@@ -36,8 +35,10 @@ msm_drm-$(CONFIG_DRM_MSM_SDE) += sde/sde_crtc.o \
 	sde/sde_kms.o \
 	sde/sde_plane.o \
 	sde/sde_connector.o \
+	sde/clone_cooling_device.o \
 	sde/sde_color_processing.o \
 	sde/sde_vbif.o \
+	xiaomi_frame_stat.o \
 	sde_io_util.o \
 	sde/sde_hw_reg_dma_v1_color_proc.o \
 	sde/sde_hw_color_proc_v4.o \
@@ -101,6 +102,8 @@ msm_drm-$(CONFIG_DRM_MSM_DSI) += dsi/dsi_phy.o \
 	dsi/dsi_panel.o \
 	dsi/dsi_clk_manager.o \
 	dsi/dsi_display_test.o \
+	dsi/dsi_display_mi.o \
+	dsi/dsi_panel_mi.o \
 
 msm_drm-$(CONFIG_DSI_PARSER) += dsi/dsi_parser.o \
 
@@ -117,5 +120,5 @@ msm_drm-$(CONFIG_DRM_MSM) += \
 	msm_notifier.o\
 
 obj-$(CONFIG_DRM_MSM)	+= msm_drm.o
+
 obj-$(CONFIG_DRM_FBDEV_EMULATION) += msm_fbdev.o
-obj-$(CONFIG_NUBIA_DISP_PREFERENCE) += nubia_disp_preference.o

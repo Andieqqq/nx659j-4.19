@@ -102,6 +102,8 @@
 		qcom,slv-addr-space-size = <0x4000000>;
 		qcom,ep-latency = <10>;
 
+		qcom,config-recovery;
+
 		qcom,pcie-phy-ver = <1102>;
 		qcom,phy-status-offset = <0x814>;
 		qcom,phy-status-bit = <6>;
@@ -282,12 +284,12 @@
 				0 0 0 4 &intc GIC_SPI 439 IRQ_TYPE_LEVEL_HIGH>;
 		msi-parent = <&pcie1_msi>;
 
-		perst-gpio = <&tlmm 159 0>;
-	/*	wake-gpio = <&tlmm 84 0>;  */
+		perst-gpio = <&tlmm 82 0>;
+		wake-gpio = <&tlmm 84 0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pcie1_clkreq_default
-				&pcie1_perst_default>;
-			/*	&pcie1_wake_default>; */
+				&pcie1_perst_default
+				&pcie1_wake_default>;
 
 		gdsc-vdd-supply = <&pcie_1_gdsc>;
 		vreg-1p8-supply = <&pm8150_l9>;

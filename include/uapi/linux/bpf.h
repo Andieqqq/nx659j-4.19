@@ -92,6 +92,7 @@ enum bpf_cmd {
 	BPF_OBJ_GET,
 	BPF_PROG_ATTACH,
 	BPF_PROG_DETACH,
+	BPF_GET_COMM_HASH,
 	BPF_PROG_TEST_RUN,
 	BPF_PROG_GET_NEXT_ID,
 	BPF_MAP_GET_NEXT_ID,
@@ -227,6 +228,20 @@ enum bpf_attach_type {
  * and NET_IP_ALIGN defined to 2.
  */
 #define BPF_F_STRICT_ALIGNMENT	(1U << 0)
+
+/* If BPF_F_ANY_ALIGNMENT is used in BPF_PROF_LOAD command, the
+ * verifier will allow any alignment whatsoever.  On platforms
+ * with strict alignment requirements for loads ands stores (such
+ * as sparc and mips) the verifier validates that all loads and
+ * stores provably follow this requirement.  This flag turns that
+ * checking and enforcement off.
+ *
+ * It is mostly used for testing when we want to validate the
+ * context and memory access aspects of the verifier, but because
+ * of an unaligned access the alignment check would trigger before
+ * the one we are interested in.
+ */
+#define BPF_F_ANY_ALIGNMENT	(1U << 1)
 
 /* when bpf_ldimm64->src_reg == BPF_PSEUDO_MAP_FD, bpf_ldimm64->imm == fd */
 #define BPF_PSEUDO_MAP_FD	1
@@ -411,6 +426,11 @@ union bpf_attr {
 		__u64		probe_offset;	/* output: probe_offset */
 		__u64		probe_addr;	/* output: probe_addr */
 	} task_fd_query;
+
+	struct { /* anonymous struct used by BPF_GET_COMM_HASH/DETACH commands */
+		__aligned_u64	hash;	/* the hash of process comm */
+		__u32		pid;	/* the pid of the process */;
+	};
 } __attribute__((aligned(8)));
 
 /* The description below is an attempt at providing documentation to eBPF
@@ -471,6 +491,8 @@ union bpf_attr {
  * u64 bpf_ktime_get_ns(void)
  * 	Description
  * 		Return the time elapsed since system boot, in nanoseconds.
+ * 		Does not include time the system was suspended.
+ * 		See: clock_gettime(CLOCK_MONOTONIC)
  * 	Return
  * 		Current *ktime*.
  *
@@ -1193,8 +1215,8 @@ union bpf_attr {
  * 	Return
  * 		The return value depends on the result of the test, and can be:
  *
- * 		* 0, if the *skb* task belongs to the cgroup2.
- * 		* 1, if the *skb* task does not belong to the cgroup2.
+ *		* 0, if current task belongs to the cgroup2.
+ *		* 1, if current task does not belong to the cgroup2.
  * 		* A negative error code, if an error occurred.
  *
  * int bpf_skb_change_tail(struct sk_buff *skb, u32 len, u64 flags)
@@ -1402,6 +1424,14 @@ union bpf_attr {
  * 		time-wait or a request socket instead), **overflowuid** value
  * 		is returned (note that **overflowuid** might also be the actual
  * 		UID value for the socket).
+ *
+ *
+ * u64 bpf_get_comm_hash_from_sk(skb)
+ *	Description
+ *		Get the comm hash of the socket process stored inside *skb*.
+ *	Return
+ *		The comm hash of the socket owner on success or 0 if the socket
+ *		pointer inside sk_buff is NULL
  *
  * u32 bpf_set_hash(struct sk_buff *skb, u32 hash)
  * 	Description
@@ -2143,6 +2173,14 @@ union bpf_attr {
  *		request in the skb.
  *	Return
  *		0 on success, or a negative error in case of failure.
+ *
+ * u64 bpf_ktime_get_boot_ns(void)
+ * 	Description
+ * 		Return the time elapsed since system boot, in nanoseconds.
+ * 		Does include the time the system was suspended.
+ * 		See: clock_gettime(CLOCK_BOOTTIME)
+ * 	Return
+ * 		Current *ktime*.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -2193,6 +2231,7 @@ union bpf_attr {
 	FN(probe_read_str),		\
 	FN(get_socket_cookie),		\
 	FN(get_socket_uid),		\
+	FN(get_comm_hash_from_sk),	\
 	FN(set_hash),			\
 	FN(setsockopt),			\
 	FN(skb_adjust_room),		\
@@ -2228,7 +2267,49 @@ union bpf_attr {
 	FN(get_current_cgroup_id),	\
 	FN(get_local_storage),		\
 	FN(sk_select_reuseport),	\
-	FN(skb_ancestor_cgroup_id),
+	FN(skb_ancestor_cgroup_id),	\
+	FN(sk_lookup_tcp),		\
+	FN(sk_lookup_udp),		\
+	FN(sk_release),			\
+	FN(map_push_elem),		\
+	FN(map_pop_elem),		\
+	FN(map_peek_elem),		\
+	FN(msg_push_data),		\
+	FN(msg_pop_data),		\
+	FN(rc_pointer_rel),		\
+	FN(spin_lock),			\
+	FN(spin_unlock),		\
+	FN(sk_fullsock),		\
+	FN(tcp_sock),			\
+	FN(skb_ecn_set_ce),		\
+	FN(get_listener_sock),		\
+	FN(skc_lookup_tcp),		\
+	FN(tcp_check_syncookie),	\
+	FN(sysctl_get_name),		\
+	FN(sysctl_get_current_value),	\
+	FN(sysctl_get_new_value),	\
+	FN(sysctl_set_new_value),	\
+	FN(strtol),			\
+	FN(strtoul),			\
+	FN(sk_storage_get),		\
+	FN(sk_storage_delete),		\
+	FN(send_signal),		\
+	FN(tcp_gen_syncookie),		\
+	FN(skb_output),			\
+	FN(probe_read_user),		\
+	FN(probe_read_kernel),		\
+	FN(probe_read_user_str),	\
+	FN(probe_read_kernel_str),	\
+	FN(tcp_send_ack),		\
+	FN(send_signal_thread),		\
+	FN(jiffies64),			\
+	FN(read_branch_records),	\
+	FN(get_ns_current_pid_tgid),	\
+	FN(xdp_output),			\
+	FN(get_netns_cookie),		\
+	FN(get_current_ancestor_cgroup_id),	\
+	FN(sk_assign),			\
+	FN(ktime_get_boot_ns),
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
  * function eBPF program intends to call

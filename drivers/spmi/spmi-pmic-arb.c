@@ -15,6 +15,8 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/spmi.h>
+#include <linux/wakeup_reason.h>
+#include <linux/syscore_ops.h>
 
 /* PMIC Arbiter configuration registers */
 #define PMIC_ARB_VERSION		0x0000

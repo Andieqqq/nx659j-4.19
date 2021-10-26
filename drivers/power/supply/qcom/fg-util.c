@@ -817,9 +817,6 @@ int fg_dump_regs(struct fg_dev *fg)
 int fg_restart(struct fg_dev *fg, int wait_time_ms)
 {
 	union power_supply_propval pval = {0, };
-	#if defined(CONFIG_NUBIA_MSOC_FEATURE)
-	union power_supply_propval msoc_pval = {0, };
-	#endif
 	int rc;
 	bool tried_again = false;
 
@@ -832,15 +829,6 @@ int fg_restart(struct fg_dev *fg, int wait_time_ms)
 		pr_err("Error in getting capacity, rc=%d\n", rc);
 		return rc;
 	}
-
-	#if defined(CONFIG_NUBIA_MSOC_FEATURE)
-	rc = power_supply_get_property(fg->fg_psy, POWER_SUPPLY_PROP_CAPACITY_MSOC,
-					&msoc_pval);
-	if (rc < 0) {
-		pr_err("Error in getting capacity msoc, rc=%d\n", rc);
-		return rc;
-	}
-	#endif
 
 	fg->last_soc = pval.intval;
 	fg->fg_restarting = true;
@@ -902,45 +890,74 @@ int fg_get_msoc_raw(struct fg_dev *fg, int *val)
 		return -EINVAL;
 	}
 
-	fg_dbg(fg, FG_POWER_SUPPLY, "raw: 0x%02x\n", cap[0]);
+//	fg_dbg(fg, FG_POWER_SUPPLY, "raw: 0x%02x\n", cap[0]);
 	*val = cap[0];
 	return 0;
 }
 
-#if defined(CONFIG_NUBIA_MSOC_FEATURE)
-int fg_get_msoc_nubia(struct fg_dev *fg, int *msoc)
-{
-	int rc;
-
-	rc = fg_get_msoc_raw(fg, msoc);	
-	if (rc < 0)
-		return rc;
-	
-	return 0;
-}
-#endif
-
+static bool optimized_soc_flag;
 int fg_get_msoc(struct fg_dev *fg, int *msoc)
 {
 	int rc;
+	int raw_msoc;
 
 	rc = fg_get_msoc_raw(fg, msoc);
 	if (rc < 0)
 		return rc;
 
-	/*
-	 * To have better endpoints for 0 and 100, it is good to tune the
-	 * calculation discarding values 0 and 255 while rounding off. Rest
-	 * of the values 1-254 will be scaled to 1-99. DIV_ROUND_UP will not
-	 * be suitable here as it rounds up any value higher than 252 to 100.
-	 */
-	if (*msoc == FULL_SOC_RAW)
-		*msoc = 100;
-	else if (*msoc == 0)
-		*msoc = 0;
-	else
-		*msoc = DIV_ROUND_CLOSEST((*msoc - 1) * (FULL_CAPACITY - 2),
-				FULL_SOC_RAW - 2) + 1;
+	rc = fg_get_msoc_raw(fg, &raw_msoc);
+	if (rc < 0)
+		return rc;
+
+	if (fg->param.smooth_batt_flag) {
+//		pr_info("===raw_msoc:%d\n", raw_msoc);
+
+		if (raw_msoc >= 255) {
+			*msoc = FULL_CAPACITY;
+		} else if (raw_msoc >= 252 && !optimized_soc_flag && fg->report_full) {
+			*msoc = FULL_CAPACITY;
+			optimized_soc_flag = true;
+		} else if (raw_msoc >= 252 && !optimized_soc_flag && !fg->report_full) {
+			*msoc = FULL_CAPACITY - 1;
+		} else if (raw_msoc >= 245 && !optimized_soc_flag) {
+			*msoc = FULL_CAPACITY - 1;
+		} else if (raw_msoc >= 245 && optimized_soc_flag){
+			*msoc = FULL_CAPACITY;
+		} else if (raw_msoc > 19) {
+			*msoc = DIV_ROUND_CLOSEST(raw_msoc * FULL_CAPACITY, FULL_SOC_RAW) + 3;
+		} else if (raw_msoc > 0) {
+			*msoc = raw_msoc / 2 + 1;
+		} else if (raw_msoc == 0) {
+			*msoc = 0;
+		} else {
+			*msoc = 0;
+		}
+
+		if (raw_msoc < 245)
+			optimized_soc_flag = false;
+	} else {
+		/*
+		 * To have better endpoints for 0 and 100, it is good to tune the
+		 * calculation discarding values 0 and 255 while rounding off. Rest
+		 * of the values 1-254 will be scaled to 1-99. DIV_ROUND_UP will not
+		 * be suitable here as it rounds up any value higher than 252 to 100.
+		 */
+		if ((*msoc >= FULL_SOC_REPORT_THR - 2)
+					&& (*msoc < FULL_SOC_RAW) && fg->report_full) {
+			*msoc = DIV_ROUND_CLOSEST(*msoc * FULL_CAPACITY, FULL_SOC_RAW) + 1;
+			if (*msoc >= FULL_CAPACITY)
+				*msoc = FULL_CAPACITY;
+		} else if (*msoc == FULL_SOC_RAW)
+			*msoc = 100;
+		else if (*msoc == 0)
+			*msoc = 0;
+		else if (*msoc >= FULL_SOC_REPORT_THR - 4 && *msoc <= FULL_SOC_REPORT_THR - 3 && fg->report_full)
+			*msoc = DIV_ROUND_CLOSEST(*msoc * FULL_CAPACITY, FULL_SOC_RAW);
+		else
+			*msoc = DIV_ROUND_CLOSEST((*msoc - 1) * (FULL_CAPACITY - 2),
+					FULL_SOC_RAW - 2) + 1;
+	}
+
 	return 0;
 }
 

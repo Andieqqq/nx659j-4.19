@@ -87,7 +87,7 @@
 			qcom,pmic-revid = <&pm8150b_revid>;
 
 			qcom,thermal-mitigation
-					= <10000000 10000000 10000000 10000000>;
+					= <3000000 1500000 1000000 500000>;
 
 			qcom,chg-term-src = <1>;
 			qcom,charger-temp-max = <800>;
@@ -280,6 +280,7 @@
 		bcl_soc:bcl-soc {
 			compatible = "qcom,msm-bcl-soc";
 			#thermal-sensor-cells = <0>;
+			status = "disabled";
 		};
 
 		pm8150b_fg: qpnp,fg {

@@ -109,6 +109,8 @@
 		qcom,no-status-check-on-disable;
 		qcom,clk-dis-wait-val = <8>;
 		qcom,gds-timeout = <500>;
+		proxy-supply = <&gpu_cx_gdsc>;
+		qcom,proxy-consumer-enable;
 		status = "disabled";
 	};
 
@@ -128,6 +130,7 @@
 		regulator-name = "gpu_gx_gdsc";
 		domain-addr = <&gpu_gx_domain_addr>;
 		sw-reset = <&gpu_gx_sw_reset>;
+		qcom,skip-disable-before-sw-enable;
 		qcom,reset-aon-logic;
 		status = "disabled";
 	};
@@ -137,6 +140,8 @@
 		compatible = "qcom,gdsc";
 		reg = <0x9981004 0x4>;
 		regulator-name = "npu_core_gdsc";
+		proxy-supply = <&npu_core_gdsc>;
+		qcom,proxy-consumer-enable;
 		status = "disabled";
 	};
 

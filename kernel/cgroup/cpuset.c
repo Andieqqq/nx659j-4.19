@@ -713,7 +713,8 @@ static int generate_sched_domains(cpumask_var_t **domains,
 					 housekeeping_cpumask(HK_FLAG_DOMAIN))))
 			continue;
 
-		if (is_sched_load_balance(cp))
+		if (is_sched_load_balance(cp) &&
+		    !cpumask_empty(cp->effective_cpus))
 			csa[csn++] = cp;
 
 		/* skip @cp's subtree */
@@ -837,22 +838,29 @@ static void rebuild_sched_domains_locked(void)
 	cpumask_var_t *doms;
 	int ndoms;
 
+    pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	lockdep_assert_cpus_held();
+	pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	lockdep_assert_held(&cpuset_mutex);
+	pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 
 	/*
 	 * We have raced with CPU hotplug. Don't do anything to avoid
 	 * passing doms with offlined cpu to partition_sched_domains().
 	 * Anyways, hotplug work item will rebuild sched domains.
 	 */
+	 pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	if (!cpumask_equal(top_cpuset.effective_cpus, cpu_active_mask))
 		return;
+	pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 
 	/* Generate domain masks and attrs */
 	ndoms = generate_sched_domains(&doms, &attr);
+    pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 
 	/* Have scheduler rebuild the domains */
 	partition_sched_domains(ndoms, doms, attr);
+    pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 }
 #else /* !CONFIG_SMP */
 static void rebuild_sched_domains_locked(void)
@@ -919,54 +927,72 @@ static void update_cpumasks_hier(struct cpuset *cs, struct cpumask *new_cpus)
 	struct cpuset *cp;
 	struct cgroup_subsys_state *pos_css;
 	bool need_rebuild_sched_domains = false;
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	rcu_read_lock();
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	cpuset_for_each_descendant_pre(cp, pos_css, cs) {
 		struct cpuset *parent = parent_cs(cp);
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		cpumask_and(new_cpus, cp->cpus_allowed, parent->effective_cpus);
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		/*
 		 * If it becomes empty, inherit the effective mask of the
 		 * parent, which is guaranteed to have some CPUs.
 		 */
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		if (is_in_v2_mode() && cpumask_empty(new_cpus))
 			cpumask_copy(new_cpus, parent->effective_cpus);
+			pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
+
 
 		/* Skip the whole subtree if the cpumask remains the same. */
 		if (cpumask_equal(new_cpus, cp->effective_cpus)) {
 			pos_css = css_rightmost_descendant(pos_css);
+			pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 			continue;
 		}
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		if (!css_tryget_online(&cp->css))
 			continue;
 		rcu_read_unlock();
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		spin_lock_irq(&callback_lock);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		cpumask_copy(cp->effective_cpus, new_cpus);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		spin_unlock_irq(&callback_lock);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 
 		WARN_ON(!is_in_v2_mode() &&
 			!cpumask_equal(cp->cpus_allowed, cp->effective_cpus));
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
+
 
 		update_tasks_cpumask(cp);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
+
 
 		/*
 		 * If the effective cpumask of any non-empty cpuset is changed,
 		 * we need to rebuild sched domains.
 		 */
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
+
 		if (!cpumask_empty(cp->cpus_allowed) &&
 		    is_sched_load_balance(cp))
 			need_rebuild_sched_domains = true;
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		rcu_read_lock();
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		css_put(&cp->css);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	}
 	rcu_read_unlock();
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 
 	if (need_rebuild_sched_domains)
 		rebuild_sched_domains_locked();
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 }
 
 /**
@@ -1702,6 +1728,11 @@ out_unlock:
 	return retval;
 }
 
+#ifdef CONFIG_UCLAMP_ASSIST
+static void uclamp_set(struct kernfs_open_file *of,
+		size_t nbytes, loff_t off);
+#endif
+
 /*
  * Common handling for a write to a "cpus" or "mems" file.
  */
@@ -1711,9 +1742,9 @@ static ssize_t cpuset_write_resmask(struct kernfs_open_file *of,
 	struct cpuset *cs = css_cs(of_css(of));
 	struct cpuset *trialcs;
 	int retval = -ENODEV;
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	buf = strstrip(buf);
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	/*
 	 * CPU or memory hotunplug may leave @cs w/o any execution
 	 * resources, in which case the hotplug code asynchronously updates
@@ -1734,40 +1765,63 @@ static ssize_t cpuset_write_resmask(struct kernfs_open_file *of,
 	 * hierarchies.
 	 */
 	css_get(&cs->css);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	kernfs_break_active_protection(of->kn);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	flush_work(&cpuset_hotplug_work);
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	get_online_cpus();
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	mutex_lock(&cpuset_mutex);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	if (!is_cpuset_online(cs))
 		goto out_unlock;
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	trialcs = alloc_trial_cpuset(cs);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	if (!trialcs) {
 		retval = -ENOMEM;
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		goto out_unlock;
 	}
 
 	switch (of_cft(of)->private) {
 	case FILE_CPULIST:
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		retval = update_cpumask(cs, trialcs, buf);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		break;
 	case FILE_MEMLIST:
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		retval = update_nodemask(cs, trialcs, buf);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		break;
 	default:
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		retval = -EINVAL;
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 		break;
 	}
-
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	free_trial_cpuset(trialcs);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
+#ifdef CONFIG_UCLAMP_ASSIST
+	uclamp_set(of, nbytes, off);
+#endif
 out_unlock:
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	mutex_unlock(&cpuset_mutex);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	put_online_cpus();
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	kernfs_unbreak_active_protection(of->kn);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	css_put(&cs->css);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	flush_workqueue(cpuset_migrate_mm_wq);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	return retval ?: nbytes;
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 }
 
 /*
@@ -1853,6 +1907,27 @@ static s64 cpuset_read_s64(struct cgroup_subsys_state *css, struct cftype *cft)
 	return 0;
 }
 
+#ifdef CONFIG_UCLAMP_TASK_GROUP
+int cpu_uclamp_min_show_wrapper(struct seq_file *sf, void *v);
+int cpu_uclamp_max_show_wrapper(struct seq_file *sf, void *v);
+
+ssize_t cpu_uclamp_min_write_wrapper(struct kernfs_open_file *of,
+				    char *buf, size_t nbytes,
+				    loff_t off);
+ssize_t cpu_uclamp_max_write_wrapper(struct kernfs_open_file *of,
+				    char *buf, size_t nbytes,
+				    loff_t off);
+
+int cpu_uclamp_ls_write_u64_wrapper(struct cgroup_subsys_state *css,
+				   struct cftype *cftype, u64 ls);
+u64 cpu_uclamp_ls_read_u64_wrapper(struct cgroup_subsys_state *css,
+				  struct cftype *cft);
+
+int cpu_uclamp_boost_write_u64_wrapper(struct cgroup_subsys_state *css,
+				   struct cftype *cftype, u64 boost);
+u64 cpu_uclamp_boost_read_u64_wrapper(struct cgroup_subsys_state *css,
+				  struct cftype *cft);
+#endif
 
 /*
  * for the common functions, 'private' gives the type of file
@@ -1956,9 +2031,78 @@ static struct cftype files[] = {
 		.write_u64 = cpuset_write_u64,
 		.private = FILE_MEMORY_PRESSURE_ENABLED,
 	},
-
+#ifdef CONFIG_UCLAMP_TASK_GROUP
+	{
+		.name = "uclamp.min",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = cpu_uclamp_min_show_wrapper,
+		.write = cpu_uclamp_min_write_wrapper,
+	},
+	{
+		.name = "uclamp.max",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = cpu_uclamp_max_show_wrapper,
+		.write = cpu_uclamp_max_write_wrapper,
+	},
+	{
+		.name = "uclamp.latency_sensitive",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_u64 = cpu_uclamp_ls_read_u64_wrapper,
+		.write_u64 = cpu_uclamp_ls_write_u64_wrapper,
+	},
+	{
+		.name = "uclamp.boosted",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_u64 = cpu_uclamp_boost_read_u64_wrapper,
+		.write_u64 = cpu_uclamp_boost_write_u64_wrapper,
+	},
+#endif
 	{ }	/* terminate */
 };
+
+#ifdef CONFIG_UCLAMP_ASSIST
+struct ucl_param {
+	char *name;
+	char uclamp_min[3];
+	char uclamp_max[3];
+	u64  uclamp_latency_sensitive;
+	u64  uclamp_boosted;
+};
+
+static void uclamp_set(struct kernfs_open_file *of,
+		size_t nbytes, loff_t off)
+{
+	int i;
+
+	struct cpuset *cs = css_cs(of_css(of));
+
+	const char *cs_name = cs->css.cgroup->kn->name;
+
+	static struct ucl_param tgts[] = {
+		{"top-app",    	     	"10", "100", 1, 1},
+		{"foreground", 	     	"0",  "50",  1, 1},
+		{"background", 	     	"20", "100", 0, 0},
+		{"system-background", 	"0",  "40",  0, 0},
+	};
+
+	for (i = 0; i < ARRAY_SIZE(tgts); i++) {
+		struct ucl_param tgt = tgts[i];
+
+		if (!strncmp(cs_name, tgt.name, strlen(tgt.name))) {
+			cpu_uclamp_min_write_wrapper(of, tgt.uclamp_min,
+				nbytes, off);
+			cpu_uclamp_max_write_wrapper(of, tgt.uclamp_max,
+				nbytes, off);
+			cpu_uclamp_ls_write_u64_wrapper(&cs->css, NULL,
+				tgt.uclamp_latency_sensitive);
+			cpu_uclamp_boost_write_u64_wrapper(&cs->css, NULL,
+				tgt.uclamp_boosted);
+
+			break;
+		}
+	}
+}
+#endif
 
 /*
  *	cpuset_css_alloc - allocate a cpuset css
@@ -2130,7 +2274,7 @@ static void cpuset_fork(struct task_struct *task)
 	if (task_css_is_root(task, cpuset_cgrp_id))
 		return;
 
-	set_cpus_allowed_ptr(task, &current->cpus_allowed);
+	set_cpus_allowed_ptr(task, current->cpus_ptr);
 	task->mems_allowed = current->mems_allowed;
 }
 

@@ -1118,6 +1118,23 @@ static void blk_mq_update_dispatch_busy(struct blk_mq_hw_ctx *hctx, bool busy)
 
 #define BLK_MQ_RESOURCE_DELAY	3		/* ms units */
 
+static void blk_mq_handle_dev_resource(struct request *rq,
+				       struct list_head *list)
+{
+	struct request *next =
+		list_first_entry_or_null(list, struct request, queuelist);
+
+	/*
+	 * If an I/O scheduler has been configured and we got a driver tag for
+	 * the next request already, free it.
+	 */
+	if (next)
+		blk_mq_put_driver_tag(next);
+
+	list_add(&rq->queuelist, list);
+	__blk_mq_requeue_request(rq);
+}
+
 /*
  * Returns true if we did some work AND can potentially do more.
  */
@@ -1185,17 +1202,7 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 
 		ret = q->mq_ops->queue_rq(hctx, &bd);
 		if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE) {
-			/*
-			 * If an I/O scheduler has been configured and we got a
-			 * driver tag for the next request already, free it
-			 * again.
-			 */
-			if (!list_empty(list)) {
-				nxt = list_first_entry(list, struct request, queuelist);
-				blk_mq_put_driver_tag(nxt);
-			}
-			list_add(&rq->queuelist, list);
-			__blk_mq_requeue_request(rq);
+			blk_mq_handle_dev_resource(rq, list);
 			break;
 		}
 
@@ -1220,6 +1227,15 @@ bool blk_mq_dispatch_rq_list(struct request_queue *q, struct list_head *list,
 		spin_lock(&hctx->lock);
 		list_splice_init(list, &hctx->dispatch);
 		spin_unlock(&hctx->lock);
+
+		/*
+		 * Order adding requests to hctx->dispatch and checking
+		 * SCHED_RESTART flag. The pair of this smp_mb() is the one
+		 * in blk_mq_sched_restart(). Avoid restart code path to
+		 * miss the new added requests to hctx->dispatch, meantime
+		 * SCHED_RESTART is observed here.
+		 */
+		smp_mb();
 
 		/*
 		 * If SCHED_RESTART was set by the caller of this function and
@@ -1682,6 +1698,18 @@ static blk_qc_t request_to_qc_t(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	return blk_tag_to_qc_t(rq->internal_tag, hctx->queue_num, true);
 }
 
+/*
+ * Don't allow direct dispatch of anything but regular reads/writes,
+ * as some of the other commands can potentially share request space
+ * with data we need for the IO scheduler. If we attempt a direct dispatch
+ * on those and fail, we can't safely add it to the scheduler afterwards
+ * without potentially overwriting data that the driver has already written.
+ */
+static bool blk_rq_can_direct_dispatch(struct request *rq)
+{
+	return req_op(rq) == REQ_OP_READ || req_op(rq) == REQ_OP_WRITE;
+}
+
 static blk_status_t __blk_mq_issue_directly(struct blk_mq_hw_ctx *hctx,
 					    struct request *rq,
 					    blk_qc_t *cookie)
@@ -1709,6 +1737,15 @@ static blk_status_t __blk_mq_issue_directly(struct blk_mq_hw_ctx *hctx,
 		break;
 	case BLK_STS_RESOURCE:
 	case BLK_STS_DEV_RESOURCE:
+		/*
+		 * If direct dispatch fails, we cannot allow any merging on
+		 * this IO. Drivers (like SCSI) may have set up permanent state
+		 * for this request, like SG tables and mappings, and if we
+		 * merge to it later on then we'll still only do IO to the
+		 * original part.
+		 */
+		rq->cmd_flags |= REQ_NOMERGE;
+
 		blk_mq_update_dispatch_busy(hctx, true);
 		__blk_mq_requeue_request(rq);
 		break;
@@ -1742,7 +1779,7 @@ static blk_status_t __blk_mq_try_issue_directly(struct blk_mq_hw_ctx *hctx,
 		goto insert;
 	}
 
-	if (q->elevator && !bypass_insert)
+	if (!blk_rq_can_direct_dispatch(rq) || (q->elevator && !bypass_insert))
 		goto insert;
 
 	if (!blk_mq_get_dispatch_budget(hctx))
@@ -1803,6 +1840,9 @@ void blk_mq_try_issue_list_directly(struct blk_mq_hw_ctx *hctx,
 		blk_status_t ret;
 		struct request *rq = list_first_entry(list, struct request,
 				queuelist);
+
+		if (!blk_rq_can_direct_dispatch(rq))
+			break;
 
 		list_del_init(&rq->queuelist);
 		ret = blk_mq_request_issue_directly(rq);
@@ -2308,11 +2348,6 @@ static void blk_mq_map_swqueue(struct request_queue *q)
 	struct blk_mq_ctx *ctx;
 	struct blk_mq_tag_set *set = q->tag_set;
 
-	/*
-	 * Avoid others reading imcomplete hctx->cpumask through sysfs
-	 */
-	mutex_lock(&q->sysfs_lock);
-
 	queue_for_each_hw_ctx(q, hctx, i) {
 		cpumask_clear(hctx->cpumask);
 		hctx->nr_ctx = 0;
@@ -2345,8 +2380,6 @@ static void blk_mq_map_swqueue(struct request_queue *q)
 		ctx->index_hw = hctx->nr_ctx;
 		hctx->ctxs[hctx->nr_ctx++] = ctx;
 	}
-
-	mutex_unlock(&q->sysfs_lock);
 
 	queue_for_each_hw_ctx(q, hctx, i) {
 		/*
@@ -2664,10 +2697,12 @@ EXPORT_SYMBOL(blk_mq_init_allocated_queue);
 /* tags can _not_ be used after returning from blk_mq_exit_queue */
 void blk_mq_exit_queue(struct request_queue *q)
 {
-	struct blk_mq_tag_set	*set = q->tag_set;
+	struct blk_mq_tag_set *set = q->tag_set;
 
-	blk_mq_del_queue_tag_set(q);
+	/* Checks hctx->flags & BLK_MQ_F_TAG_QUEUE_SHARED. */
 	blk_mq_exit_hw_queues(q, set, set->nr_hw_queues);
+	/* May clear BLK_MQ_F_TAG_QUEUE_SHARED in hctx->flags. */
+	blk_mq_del_queue_tag_set(q);
 }
 
 /* Basically redo blk_mq_init_queue with queue frozen */
@@ -3128,10 +3163,9 @@ static bool blk_mq_poll_hybrid_sleep(struct request_queue *q,
 	kt = nsecs;
 
 	mode = HRTIMER_MODE_REL;
-	hrtimer_init_on_stack(&hs.timer, CLOCK_MONOTONIC, mode);
+	hrtimer_init_sleeper_on_stack(&hs, CLOCK_MONOTONIC, mode);
 	hrtimer_set_expires(&hs.timer, kt);
 
-	hrtimer_init_sleeper(&hs, current);
 	do {
 		if (blk_mq_rq_state(rq) == MQ_RQ_COMPLETE)
 			break;

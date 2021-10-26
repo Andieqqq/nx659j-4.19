@@ -51,6 +51,7 @@ struct oom_control {
 };
 
 extern struct mutex oom_lock;
+extern struct mutex oom_adj_mutex;
 
 static inline void set_current_oom_origin(void)
 {
@@ -121,9 +122,6 @@ extern struct task_struct *find_lock_task_mm(struct task_struct *p);
 
 extern void dump_tasks(struct mem_cgroup *memcg,
 		       const nodemask_t *nodemask);
-//nubia add for lowmemorykiller
-extern void wake_oom_reaper(struct task_struct *tsk);
-//nubia add end
 
 #ifdef CONFIG_HAVE_USERSPACE_LOW_MEMORY_KILLER
 extern bool should_ulmk_retry(gfp_t gfp);

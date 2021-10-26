@@ -842,6 +842,9 @@ static bool a6xx_gmu_cx_is_on(struct kgsl_device *device)
 {
 	unsigned int val;
 
+	if (ADRENO_QUIRK(ADRENO_DEVICE(device), ADRENO_QUIRK_CX_GDSC))
+		return regulator_is_enabled(KGSL_GMU_DEVICE(device)->cx_gdsc);
+
 	gmu_core_regread(device, A6XX_GPU_CC_CX_GDSCR, &val);
 	return (val & BIT(31));
 }
@@ -873,7 +876,7 @@ static int a6xx_gmu_gfx_rail_on(struct kgsl_device *device)
 {
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct gmu_device *gmu = KGSL_GMU_DEVICE(device);
-	unsigned int perf_idx = pwr->num_pwrlevels - pwr->default_pwrlevel - 1;
+	unsigned int perf_idx = pwr->num_pwrlevels - 1;
 	uint32_t default_opp = gmu->rpmh_votes.gx_votes[perf_idx];
 
 	gmu_core_regwrite(device, A6XX_GMU_BOOT_SLUMBER_OPTION,
@@ -1174,18 +1177,18 @@ static int a6xx_gmu_load_firmware(struct kgsl_device *device)
 	int ret, offset = 0;
 
 	/* GMU fw already saved and verified so do nothing new */
-	if (gmu->fw_image)
-		return 0;
+	if (!gmu->fw_image) {
 
-	if (a6xx_core->gmufw_name == NULL)
-		return -EINVAL;
+		if (a6xx_core->gmufw_name == NULL)
+			return -EINVAL;
 
-	ret = request_firmware(&gmu->fw_image, a6xx_core->gmufw_name,
-			device->dev);
-	if (ret) {
-		dev_err(device->dev, "request_firmware (%s) failed: %d\n",
-				a6xx_core->gmufw_name, ret);
-		return ret;
+		ret = request_firmware(&gmu->fw_image, a6xx_core->gmufw_name,
+				device->dev);
+		if (ret) {
+			dev_err(device->dev, "request_firmware (%s) failed: %d\n",
+					a6xx_core->gmufw_name, ret);
+			return ret;
+		}
 	}
 
 	/*
@@ -1208,11 +1211,12 @@ static int a6xx_gmu_load_firmware(struct kgsl_device *device)
 		offset += sizeof(*blk);
 
 		if (blk->type == GMU_BLK_TYPE_PREALLOC_REQ ||
-				blk->type == GMU_BLK_TYPE_PREALLOC_PERSIST_REQ)
+			blk->type == GMU_BLK_TYPE_PREALLOC_PERSIST_REQ) {
 			ret = gmu_prealloc_req(device, blk);
 
-		if (ret)
-			return ret;
+			if (ret)
+				return ret;
+		}
 	}
 
 	 /* Request any other cache ranges that might be required */
@@ -1293,8 +1297,8 @@ static int a6xx_gmu_notify_slumber(struct kgsl_device *device)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct gmu_device *gmu = KGSL_GMU_DEVICE(device);
-	int bus_level = pwr->pwrlevels[pwr->default_pwrlevel].bus_freq;
-	int perf_idx = gmu->num_gpupwrlevels - pwr->default_pwrlevel - 1;
+	int bus_level = pwr->pwrlevels[pwr->num_pwrlevels - 1].bus_freq;
+	int perf_idx = gmu->num_gpupwrlevels - 1;
 	int ret, state;
 
 	/* Disable the power counter so that the GMU is not busy */

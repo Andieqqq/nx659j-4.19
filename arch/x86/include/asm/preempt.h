@@ -8,6 +8,9 @@
 
 DECLARE_PER_CPU(int, __preempt_count);
 
+/* We use the MSB mostly because its available */
+#define PREEMPT_NEED_RESCHED	0x80000000
+
 /*
  * We use the PREEMPT_NEED_RESCHED bit as an inverted NEED_RESCHED such
  * that a decrement hitting 0 means we can and should reschedule.
@@ -40,7 +43,7 @@ static __always_inline void preempt_count_set(int pc)
 #define init_task_preempt_count(p) do { } while (0)
 
 #define init_idle_preempt_count(p, cpu) do { \
-	per_cpu(__preempt_count, (cpu)) = PREEMPT_ENABLED; \
+	per_cpu(__preempt_count, (cpu)) = PREEMPT_DISABLED; \
 } while (0)
 
 /*

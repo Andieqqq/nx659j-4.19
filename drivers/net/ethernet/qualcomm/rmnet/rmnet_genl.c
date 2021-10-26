@@ -50,7 +50,7 @@ struct genl_family rmnet_core_genl_family = {
 DEFINE_HASHTABLE(rmnet_pid_ht, RMNET_PID_STATS_HT_SIZE);
 
 /* Spinlock definition for pid hash table */
-static DEFINE_SPINLOCK(rmnet_pid_ht_splock);
+DEFINE_SPINLOCK(rmnet_pid_ht_splock);
 
 #define RMNET_GENL_SEC_TO_MSEC(x)   ((x) * 1000)
 #define RMNET_GENL_SEC_TO_NSEC(x)   ((x) * 1000000000)
@@ -319,9 +319,9 @@ int rmnet_core_genl_pid_bps_req_hdlr(struct sk_buff *skb_2,
 		rmnet_core_userspace_connected = 1;
 
 	/* Copy to pid/byte list to the payload */
+	memset(&pid_bps_resp, 0x0,
+	       sizeof(pid_bps_resp));
 	if (is_req_valid) {
-		memset(&pid_bps_resp, 0x0,
-		       sizeof(pid_bps_resp));
 		rmnet_create_pid_bps_resp(&pid_bps_resp);
 	}
 	pid_bps_resp.valid = 1;

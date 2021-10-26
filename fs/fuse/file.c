@@ -18,16 +18,15 @@
 #include <linux/swap.h>
 #include <linux/falloc.h>
 #include <linux/uio.h>
+#include <linux/fs.h>
 
 static const struct file_operations fuse_direct_io_file_operations;
 
 static int fuse_send_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
-			  int opcode, struct fuse_open_out *outargp,
-              struct file **passthrough_filp)
+			  int opcode, struct fuse_open_out *outargp)
 {
 	struct fuse_open_in inarg;
 	FUSE_ARGS(args);
-    int ret;
 
 	memset(&inarg, 0, sizeof(inarg));
 	inarg.flags = file->f_flags & ~(O_CREAT | O_EXCL | O_NOCTTY);
@@ -42,10 +41,7 @@ static int fuse_send_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 	args.out.args[0].size = sizeof(*outargp);
 	args.out.args[0].value = outargp;
 
-	ret = fuse_simple_request(fc, &args);
-	*passthrough_filp = args.passthrough_filp;
-
-    return ret;
+	return fuse_simple_request(fc, &args);
 }
 
 struct fuse_file *fuse_file_alloc(struct fuse_conn *fc)
@@ -133,18 +129,14 @@ int fuse_do_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 	ff->fh = 0;
 	ff->open_flags = FOPEN_KEEP_CACHE; /* Default for no-open */
 	if (!fc->no_open || isdir) {
-        struct file *passthrough_filp;
 		struct fuse_open_out outarg;
 		int err;
 
-        err = fuse_send_open(fc, nodeid, file, opcode, &outarg,
-                             &passthrough_filp);
-
+		err = fuse_send_open(fc, nodeid, file, opcode, &outarg);
 		if (!err) {
 			ff->fh = outarg.fh;
 			ff->open_flags = outarg.open_flags;
-			ff->passthrough_filp = passthrough_filp;
-
+                        fuse_passthrough_setup(fc, ff, &outarg);
 		} else if (err != -ENOSYS || isdir) {
 			fuse_file_free(ff);
 			return err;
@@ -266,8 +258,7 @@ void fuse_release_common(struct file *file, bool isdir)
 	struct fuse_req *req = ff->reserved_req;
 	int opcode = isdir ? FUSE_RELEASEDIR : FUSE_RELEASE;
 
-    fuse_passthrough_release(ff);
-
+	fuse_passthrough_release(&ff->passthrough);
 	fuse_prepare_release(ff, file->f_flags, opcode);
 
 	if (ff->flock) {
@@ -737,6 +728,7 @@ static int fuse_do_readpage(struct file *file, struct page *page)
 	u64 attr_ver;
 	int err;
 
+
 	/*
 	 * Page writeback can extend beyond the lifetime of the
 	 * page-cache page, so make sure we read a properly synced
@@ -824,6 +816,7 @@ static void fuse_readpages_end(struct fuse_conn *fc, struct fuse_req *req)
 	}
 	if (req->ff)
 		fuse_file_put(req->ff, false, false);
+
 }
 
 static void fuse_send_readpages(struct fuse_req *req, struct file *file)
@@ -924,10 +917,11 @@ static int fuse_readpages(struct file *file, struct address_space *mapping,
 
 	err = read_cache_pages(mapping, pages, fuse_readpages_fill, &data);
 	if (!err) {
-		if (data.req->num_pages)
+		if (data.req->num_pages) {
 			fuse_send_readpages(data.req, file);
-		else
+		} else {
 			fuse_put_request(fc, data.req);
+		}
 	}
 out:
 	return err;
@@ -935,10 +929,9 @@ out:
 
 static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
-	struct file *file = iocb->ki_filp;
 	struct inode *inode = iocb->ki_filp->f_mapping->host;
 	struct fuse_conn *fc = get_fuse_conn(inode);
-	struct fuse_file *ff = file->private_data;
+	struct fuse_file *ff = iocb->ki_filp->private_data;
 
 	/*
 	 * In auto invalidate mode, always update attributes on read.
@@ -952,9 +945,8 @@ static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		if (err)
 			return err;
 	}
-    if (ff->passthrough_filp) {
-		return fuse_passthrough_read_iter(iocb, to);
-	}
+	if (ff->passthrough.filp)
+            return fuse_passthrough_read_iter(iocb, to);
 	return generic_file_read_iter(iocb, to);
 }
 
@@ -1193,12 +1185,15 @@ static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
 	struct address_space *mapping = file->f_mapping;
-	struct fuse_file *ff = file->private_data;
 	ssize_t written = 0;
 	ssize_t written_buffered = 0;
 	struct inode *inode = mapping->host;
 	ssize_t err;
 	loff_t endbyte = 0;
+	struct fuse_file *ff = file->private_data;
+
+	if (ff->passthrough.filp)
+        	return fuse_passthrough_write_iter(iocb, from);
 
 	if (get_fuse_conn(inode)->writeback_cache) {
 		/* Update size (EOF optimization) and mode (SUID clearing) */
@@ -1226,10 +1221,6 @@ static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (err)
 		goto out;
 
-	if (ff->passthrough_filp) {
-        written = fuse_passthrough_write_iter(iocb, from);
-        goto out;
-	}
 	if (iocb->ki_flags & IOCB_DIRECT) {
 		loff_t pos = iocb->ki_pos;
 		written = generic_file_direct_write(iocb, from);
@@ -1426,6 +1417,7 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	}
 	if (!IS_ERR(req))
 		fuse_put_request(fc, req);
+
 	if (res > 0)
 		*ppos = pos;
 
@@ -1978,6 +1970,7 @@ static int fuse_write_begin(struct file *file, struct address_space *mapping,
 	struct page *page;
 	loff_t fsize;
 	int err = -ENOMEM;
+	struct inode *inode = mapping->host;
 
 	WARN_ON(!fc->writeback_cache);
 
@@ -2555,7 +2548,16 @@ long fuse_do_ioctl(struct file *file, unsigned int cmd, unsigned long arg,
 		struct iovec *iov = iov_page;
 
 		iov->iov_base = (void __user *)arg;
-		iov->iov_len = _IOC_SIZE(cmd);
+
+		switch (cmd) {
+		case FS_IOC_GETFLAGS:
+		case FS_IOC_SETFLAGS:
+			iov->iov_len = sizeof(int);
+			break;
+		default:
+			iov->iov_len = _IOC_SIZE(cmd);
+			break;
+		}
 
 		if (_IOC_DIR(cmd) & _IOC_WRITE) {
 			in_iov = iov;

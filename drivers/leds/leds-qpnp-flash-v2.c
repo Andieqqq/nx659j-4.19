@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"flashv2: %s: " fmt, __func__
@@ -30,6 +30,7 @@
 
 #define	FLASH_LED_REG_LED_STATUS2(base)		(base + 0x09)
 #define	FLASH_LED_VPH_DROOP_FAULT_MASK		BIT(4)
+#define	FLASH_LED_THERMAL_OTST_MASK		GENMASK(2, 0)
 
 #define	FLASH_LED_REG_INT_RT_STS(base)		(base + 0x10)
 
@@ -83,6 +84,14 @@
 
 #define	FLASH_LED_REG_THERMAL_DEBOUNCE(base)	(base + 0x5A)
 #define	FLASH_LED_THERMAL_DEBOUNCE_MASK		GENMASK(1, 0)
+
+#define	FLASH_LED_REG_RGLR_RAMP_RATE(base)	(base + 0x5B)
+#define	FLASH_LED_RAMP_UP_STEP_MASK		GENMASK(6, 4)
+#define	FLASH_LED_RAMP_UP_STEP_SHIFT		4
+#define	FLASH_LED_RAMP_DOWN_STEP_MASK		GENMASK(2, 0)
+#define	FLASH_LED_RAMP_STEP_MIN_NS		200
+#define	FLASH_LED_RAMP_STEP_MAX_NS		25600
+#define	FLASH_LED_RAMP_STEP_DEFAULT_NS		6400
 
 #define	FLASH_LED_REG_VPH_DROOP_THRESHOLD(base)	(base + 0x61)
 #define	FLASH_LED_VPH_DROOP_HYSTERESIS_MASK	GENMASK(5, 4)
@@ -277,6 +286,8 @@ struct flash_led_platform_data {
 	int			thermal_thrsh1;
 	int			thermal_thrsh2;
 	int			thermal_thrsh3;
+	int			ramp_up_step;
+	int			ramp_down_step;
 	int			hw_strobe_option;
 	u32			led1n2_iclamp_low_ma;
 	u32			led1n2_iclamp_mid_ma;
@@ -346,6 +357,11 @@ static int max_ires_curr_ma_table[MAX_IRES_LEVELS] = {
 	FLASH_LED_IRES12P5_MAX_CURR_MA, FLASH_LED_IRES10P0_MAX_CURR_MA,
 	FLASH_LED_IRES7P5_MAX_CURR_MA, FLASH_LED_IRES5P0_MAX_CURR_MA
 };
+
+static struct flash_node_data *g_torch_0;
+static struct flash_node_data *g_torch_1;
+static struct flash_switch_data *g_switch_0;
+static struct flash_switch_data *g_switch_1;
 
 static inline int get_current_reg_code(int target_curr_ma, int ires_ua)
 {
@@ -630,6 +646,16 @@ static int qpnp_flash_led_init_settings(struct qpnp_flash_led *led)
 	if (rc < 0)
 		return rc;
 
+	val = led->pdata->ramp_up_step << FLASH_LED_RAMP_UP_STEP_SHIFT;
+	val |= led->pdata->ramp_down_step;
+	rc = qpnp_flash_led_masked_write(led,
+			FLASH_LED_REG_RGLR_RAMP_RATE(led->base),
+			FLASH_LED_RAMP_UP_STEP_MASK |
+			FLASH_LED_RAMP_DOWN_STEP_MASK,
+			val);
+	if (rc < 0)
+		return rc;
+
 	rc = qpnp_flash_led_masked_write(led,
 			FLASH_LED_REG_VPH_DROOP_DEBOUNCE(led->base),
 			FLASH_LED_VPH_DROOP_DEBOUNCE_MASK,
@@ -800,8 +826,11 @@ static int get_property_from_fg(struct qpnp_flash_led *led,
 	union power_supply_propval pval = {0, };
 
 	if (!led->bms_psy) {
-		pr_err("no bms psy found\n");
-		return -EINVAL;
+		led->bms_psy = power_supply_get_by_name("bms");
+		if (!led->bms_psy) {
+			pr_err_ratelimited("Couldn't get bms_psy\n");
+			return -ENODEV;
+		}
 	}
 
 	rc = power_supply_get_property(led->bms_psy, prop, &pval);
@@ -1198,6 +1227,7 @@ static int qpnp_flash_led_calc_thermal_current_lim(struct qpnp_flash_led *led,
 	if (rc < 0)
 		return rc;
 
+	otst_status &= FLASH_LED_THERMAL_OTST_MASK;
 	/* Look up current limit based on THERMAL_OTST status */
 	if (otst_status)
 		*thermal_current_lim =
@@ -1804,6 +1834,9 @@ static void qpnp_flash_led_brightness_set(struct led_classdev *led_cdev,
 						strlen("led:torch"))) {
 		fnode = container_of(led_cdev, struct flash_node_data, cdev);
 		led = dev_get_drvdata(&fnode->pdev->dev);
+	} else if (!strncmp(led_cdev->name, "flashlight", strlen("flashlight"))) {
+		fnode = container_of(led_cdev, struct flash_node_data, cdev);
+		led = dev_get_drvdata(&fnode->pdev->dev);
 	}
 
 	if (!led) {
@@ -1817,7 +1850,17 @@ static void qpnp_flash_led_brightness_set(struct led_classdev *led_cdev,
 		if (rc < 0)
 			pr_err("Failed to set flash LED switch rc=%d\n", rc);
 	} else if (fnode) {
-		qpnp_flash_led_node_set(fnode, value);
+		if (!strncmp(led_cdev->name, "flashlight", strlen("flashlight"))) {
+			if (g_torch_0 && g_torch_1 && g_switch_0 && g_switch_1) {
+				pr_err("flash light fnode %d value %d", __LINE__, value);
+				qpnp_flash_led_node_set(g_torch_0, value);
+				qpnp_flash_led_node_set(g_torch_1, value);
+				qpnp_flash_led_switch_set(g_switch_0, value > 0);
+				qpnp_flash_led_switch_set(g_switch_1, value > 0);
+			}
+		} else {
+			qpnp_flash_led_node_set(fnode, value);
+		}
 	}
 
 	spin_unlock(&led->lock);
@@ -1870,41 +1913,6 @@ static struct device_attribute qpnp_flash_led_attrs[] = {
 	__ATTR(max_current, 0664, qpnp_flash_led_max_current_show, NULL),
 	__ATTR(enable, 0664, NULL, qpnp_flash_led_prepare_store),
 };
-
-static int flash_led_psy_notifier_call(struct notifier_block *nb,
-		unsigned long ev, void *v)
-{
-	struct power_supply *psy = v;
-	struct qpnp_flash_led *led =
-			container_of(nb, struct qpnp_flash_led, nb);
-
-	if (ev != PSY_EVENT_PROP_CHANGED)
-		return NOTIFY_OK;
-
-	if (!strcmp(psy->desc->name, "bms")) {
-		led->bms_psy = power_supply_get_by_name("bms");
-		if (!led->bms_psy)
-			pr_err("Failed to get bms power_supply\n");
-		else
-			power_supply_unreg_notifier(&led->nb);
-	}
-
-	return NOTIFY_OK;
-}
-
-static int flash_led_psy_register_notifier(struct qpnp_flash_led *led)
-{
-	int rc;
-
-	led->nb.notifier_call = flash_led_psy_notifier_call;
-	rc = power_supply_reg_notifier(&led->nb);
-	if (rc < 0) {
-		pr_err("Couldn't register psy notifier, rc = %d\n", rc);
-		return rc;
-	}
-
-	return 0;
-}
 
 /* irq handler */
 static irqreturn_t qpnp_flash_led_irq_handler(int irq, void *_led)
@@ -2904,6 +2912,30 @@ static int qpnp_flash_led_parse_common_dt(struct qpnp_flash_led *led,
 		return rc;
 	}
 
+	val = FLASH_LED_RAMP_STEP_DEFAULT_NS;
+	rc = of_property_read_u32(node, "qcom,ramp-up-step", &val);
+	if (!rc && (val < FLASH_LED_RAMP_STEP_MIN_NS ||
+				val > FLASH_LED_RAMP_STEP_MAX_NS)) {
+		pr_err("Invalid ramp-up-step %d\n", val);
+		return -EINVAL;
+	} else if (rc && rc != -EINVAL) {
+		pr_err("Unable to read ramp-up-step, rc=%d\n", rc);
+		return rc;
+	}
+	led->pdata->ramp_up_step = ilog2(val / 100) - 1;
+
+	val = FLASH_LED_RAMP_STEP_DEFAULT_NS;
+	rc = of_property_read_u32(node, "qcom,ramp-down-step", &val);
+	if (!rc && (val < FLASH_LED_RAMP_STEP_MIN_NS ||
+				val > FLASH_LED_RAMP_STEP_MAX_NS)) {
+		pr_err("Invalid ramp-down-step %d\n", val);
+		return -EINVAL;
+	} else if (rc && rc != -EINVAL) {
+		pr_err("Unable to read ramp-down-step, rc=%d\n", rc);
+		return rc;
+	}
+	led->pdata->ramp_down_step = ilog2(val / 100) - 1;
+
 	rc = qpnp_flash_led_parse_battery_prop_dt(led, node);
 	if (rc < 0)
 		return rc;
@@ -2986,6 +3018,8 @@ static int qpnp_flash_led_probe(struct platform_device *pdev)
 	struct device_node *node, *temp;
 	const char *temp_string;
 	int rc, i = 0, j = 0;
+	struct flash_node_data *fnode;
+	struct flash_switch_data *snode;
 
 	node = pdev->dev.of_node;
 	if (!node) {
@@ -3071,12 +3105,22 @@ static int qpnp_flash_led_probe(struct platform_device *pdev)
 					i, rc);
 				goto error_led_register;
 			}
+			fnode = &led->fnode[i];
+			if (!strcmp("led:torch_0", fnode->cdev.name))
+				g_torch_0 = fnode;
+			else if (!strcmp("led:torch_1",  fnode->cdev.name))
+				g_torch_1 = fnode;
 			i++;
 		}
 
 		if (!strcmp("switch", temp_string)) {
 			rc = qpnp_flash_led_parse_and_register_switch(led,
 					&led->snode[j], temp);
+			snode = &led->snode[j];
+			if (!strcmp("led:switch_0", snode->cdev.name))
+				g_switch_0 = snode;
+			else if (!strcmp("led:switch_1", snode->cdev.name))
+				g_switch_1 = snode;
 			if (rc < 0) {
 				pr_err("Unable to parse and register switch node, rc=%d\n",
 					rc);
@@ -3089,15 +3133,6 @@ static int qpnp_flash_led_probe(struct platform_device *pdev)
 	rc = qpnp_flash_led_register_interrupts(led);
 	if (rc < 0)
 		goto error_switch_register;
-
-	led->bms_psy = power_supply_get_by_name("bms");
-	if (!led->bms_psy) {
-		rc = flash_led_psy_register_notifier(led);
-		if (rc < 0) {
-			pr_err("Couldn't register psy notifier, rc = %d\n", rc);
-			goto error_switch_register;
-		}
-	}
 
 	rc = qpnp_flash_led_init_settings(led);
 	if (rc < 0) {

@@ -28,6 +28,7 @@
  * Change this to 1 if you want to see the failure printouts:
  */
 static unsigned int debug_locks_verbose;
+unsigned int force_read_lock_recursive;
 
 static DEFINE_WD_CLASS(ww_lockdep);
 
@@ -1475,7 +1476,7 @@ static void ww_test_edeadlk_normal(void)
 
 	mutex_lock(&o2.base);
 	o2.ctx = &t2;
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 
 	WWAI(&t);
 	t2 = t;
@@ -1500,7 +1501,7 @@ static void ww_test_edeadlk_normal_slow(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	WWAI(&t);
@@ -1527,7 +1528,7 @@ static void ww_test_edeadlk_no_unlock(void)
 
 	mutex_lock(&o2.base);
 	o2.ctx = &t2;
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 
 	WWAI(&t);
 	t2 = t;
@@ -1551,7 +1552,7 @@ static void ww_test_edeadlk_no_unlock_slow(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	WWAI(&t);
@@ -1576,7 +1577,7 @@ static void ww_test_edeadlk_acquire_more(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	WWAI(&t);
@@ -1597,7 +1598,7 @@ static void ww_test_edeadlk_acquire_more_slow(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	WWAI(&t);
@@ -1618,11 +1619,11 @@ static void ww_test_edeadlk_acquire_more_edeadlk(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	mutex_lock(&o3.base);
-	mutex_release(&o3.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o3.base.dep_map, _THIS_IP_);
 	o3.ctx = &t2;
 
 	WWAI(&t);
@@ -1644,11 +1645,11 @@ static void ww_test_edeadlk_acquire_more_edeadlk_slow(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	mutex_lock(&o3.base);
-	mutex_release(&o3.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o3.base.dep_map, _THIS_IP_);
 	o3.ctx = &t2;
 
 	WWAI(&t);
@@ -1669,7 +1670,7 @@ static void ww_test_edeadlk_acquire_wrong(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	WWAI(&t);
@@ -1694,7 +1695,7 @@ static void ww_test_edeadlk_acquire_wrong_slow(void)
 	int ret;
 
 	mutex_lock(&o2.base);
-	mutex_release(&o2.base.dep_map, 1, _THIS_IP_);
+	mutex_release(&o2.base.dep_map, _THIS_IP_);
 	o2.ctx = &t2;
 
 	WWAI(&t);
@@ -1979,6 +1980,11 @@ void locking_selftest(void)
 	}
 
 	/*
+	 * treats read_lock() as recursive read locks for testing purpose
+	 */
+	force_read_lock_recursive = 1;
+
+	/*
 	 * Run the testsuite:
 	 */
 	printk("------------------------\n");
@@ -1989,6 +1995,7 @@ void locking_selftest(void)
 
 	init_shared_classes();
 	debug_locks_silent = !debug_locks_verbose;
+	lockdep_set_selftest_task(current);
 
 	DO_TESTCASE_6R("A-A deadlock", AA);
 	DO_TESTCASE_6R("A-B-B-A deadlock", ABBA);
@@ -2072,6 +2079,11 @@ void locking_selftest(void)
 
 	ww_tests();
 
+	force_read_lock_recursive = 0;
+	/*
+	 * queued_read_lock() specific test cases can be put here
+	 */
+
 	if (unexpected_testcase_failures) {
 		printk("-----------------------------------------------------------------\n");
 		debug_locks = 0;
@@ -2097,5 +2109,6 @@ void locking_selftest(void)
 		printk("---------------------------------\n");
 		debug_locks = 1;
 	}
+	lockdep_set_selftest_task(NULL);
 	debug_locks_silent = 0;
 }

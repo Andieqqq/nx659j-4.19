@@ -41,12 +41,19 @@ do {									     \
 			       ch->lcid, ch->rcid, __func__, ##__VA_ARGS__); \
 } while (0)
 
-
 #define GLINK_ERR(ctxt, x, ...)						  \
 do {									  \
 	pr_err_ratelimited("[%s]: "x, __func__, ##__VA_ARGS__);		  \
 	if (ctxt)							  \
 		ipc_log_string(ctxt, "[%s]: "x, __func__, ##__VA_ARGS__); \
+
+#define CH_ERR(ch, x, ...)						     \
+do {									     \
+	if (ch->glink) {						     \
+		ipc_log_string(ch->glink->ilc, "%s[%d:%d] %s: "x, ch->name,  \
+			       ch->lcid, ch->rcid, __func__, ##__VA_ARGS__); \
+		dev_err(ch->glink->dev, "[%s]: "x, __func__, ##__VA_ARGS__); \
+	}								     \
 } while (0)
 
 #define GLINK_NAME_SIZE		32
@@ -1030,6 +1037,7 @@ static int qcom_glink_rx_data(struct qcom_glink *glink, size_t avail)
 			dev_err(glink->dev,
 				"no intent found for channel %s intent %d",
 				channel->name, liid);
+			ret = -ENOENT;
 			goto advance_rx;
 		}
 	}
@@ -1049,11 +1057,19 @@ static int qcom_glink_rx_data(struct qcom_glink *glink, size_t avail)
 	if (!left_size) {
 		spin_lock(&channel->recv_lock);
 		if (channel->ept.cb) {
-			channel->ept.cb(channel->ept.rpdev,
+			ret = channel->ept.cb(channel->ept.rpdev,
 					intent->data,
 					intent->offset,
 					channel->ept.priv,
 					RPMSG_ADDR_ANY);
+
+			if (ret < 0) {
+				CH_ERR(channel,
+					"callback error ret = %d\n", ret);
+				ret = 0;
+			}
+		} else {
+			CH_ERR(channel, "callback not present\n");
 		}
 		spin_unlock(&channel->recv_lock);
 
@@ -1396,13 +1412,14 @@ static struct rpmsg_endpoint *qcom_glink_create_ept(struct rpmsg_device *rpdev,
 		if (ret)
 			return NULL;
 	}
+	CH_INFO(channel, "Initializing ept\n");
 
 	ept = &channel->ept;
 	ept->rpdev = rpdev;
 	ept->cb = cb;
 	ept->priv = priv;
 	ept->ops = &glink_endpoint_ops;
-
+	CH_INFO(channel, "Initialized ept\n");
 	return ept;
 }
 
@@ -1422,6 +1439,7 @@ static int qcom_glink_announce_create(struct rpmsg_device *rpdev)
 	int iid;
 	int size;
 
+	CH_INFO(channel, "Entered\n");
 	if (glink->intentless || !completion_done(&channel->open_ack))
 		return 0;
 
@@ -1458,6 +1476,7 @@ static int qcom_glink_announce_create(struct rpmsg_device *rpdev)
 			qcom_glink_advertise_intent(glink, channel, intent);
 		}
 	}
+	CH_INFO(channel, "Exit\n");
 	return 0;
 }
 
@@ -2065,9 +2084,11 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 	snprintf(glink->irqname, 32, "glink-native-%s", glink->name);
 
 	irq = of_irq_get(dev->of_node, 0);
+	snprintf(glink->irqname, sizeof(glink->irqname)-1, "glink-native_%s", glink->name);
+        dev_err(dev, "glink-native glink->irqname=%s irq=%d\n", glink->irqname, irq);
 	ret = devm_request_irq(dev, irq,
 			       qcom_glink_native_intr,
-			       IRQF_NO_SUSPEND | IRQF_SHARED,
+			       IRQF_SHARED,
 			       glink->irqname, glink);
 	if (ret) {
 		dev_err(dev, "failed to request IRQ\n");
@@ -2075,6 +2096,9 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 	}
 
 	glink->irq = irq;
+	ret = enable_irq_wake(glink->irq);
+	if (ret)
+		dev_err(dev, "failed to set irq wake\n");
 
 	size = of_property_count_u32_elems(dev->of_node, "cpu-affinity");
 	if (size > 0) {

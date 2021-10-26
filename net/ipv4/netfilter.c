@@ -17,16 +17,18 @@
 #include <net/netfilter/nf_queue.h>
 
 /* route_me_harder function, used by iptable_nat, iptable_mangle + ip_queue */
-int ip_route_me_harder(struct net *net, struct sk_buff *skb, unsigned int addr_type)
+int ip_route_me_harder(struct net *net, struct sock *sk, struct sk_buff *skb, unsigned int addr_type)
 {
 	const struct iphdr *iph = ip_hdr(skb);
 	struct rtable *rt;
 	struct flowi4 fl4 = {};
 	__be32 saddr = iph->saddr;
-	const struct sock *sk = skb_to_full_sk(skb);
-	__u8 flags = sk ? inet_sk_flowi_flags(sk) : 0;
+	__u8 flags;
 	struct net_device *dev = skb_dst(skb)->dev;
 	unsigned int hh_len;
+
+	sk = sk_to_full_sk(sk);
+	flags = sk ? inet_sk_flowi_flags(sk) : 0;
 
 	if (addr_type == RTN_UNSPEC)
 		addr_type = inet_addr_type_dev_table(net, dev, saddr);
@@ -46,6 +48,11 @@ int ip_route_me_harder(struct net *net, struct sk_buff *skb, unsigned int addr_t
 		fl4.flowi4_oif = l3mdev_master_ifindex(dev);
 	fl4.flowi4_mark = skb->mark;
 	fl4.flowi4_flags = flags;
+
+	/* android vpn need uid to match sepolicy route when reroute because of
+	 * packets have been changed by mangle table's rules.
+	 */
+	fl4.flowi4_uid = sock_net_uid(net, sk);
 	rt = ip_route_output_key(net, &fl4);
 	if (IS_ERR(rt))
 		return PTR_ERR(rt);
@@ -91,8 +98,8 @@ int nf_ip_reroute(struct sk_buff *skb, const struct nf_queue_entry *entry)
 		      skb->mark == rt_info->mark &&
 		      iph->daddr == rt_info->daddr &&
 		      iph->saddr == rt_info->saddr))
-			return ip_route_me_harder(entry->state.net, skb,
-						  RTN_UNSPEC);
+			return ip_route_me_harder(entry->state.net, entry->state.sk,
+						  skb, RTN_UNSPEC);
 	}
 	return 0;
 }

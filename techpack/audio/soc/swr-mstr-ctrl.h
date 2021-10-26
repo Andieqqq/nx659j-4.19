@@ -11,10 +11,6 @@
 #include <soc/qcom/pm.h>
 #include <soc/swr-common.h>
 
-#ifndef CONFIG_DEBUG_FS
-#define CONFIG_DEBUG_FS
-#endif
-
 #ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>

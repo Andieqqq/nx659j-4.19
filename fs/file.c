@@ -70,7 +70,7 @@ static void copy_fd_bitmaps(struct fdtable *nfdt, struct fdtable *ofdt,
  */
 static void copy_fdtable(struct fdtable *nfdt, struct fdtable *ofdt)
 {
-	unsigned int cpy, set;
+	size_t cpy, set;
 
 	BUG_ON(nfdt->max_fds < ofdt->max_fds);
 
@@ -539,6 +539,12 @@ static int alloc_fd(unsigned start, unsigned flags)
 {
 	return __alloc_fd(current->files, start, rlimit(RLIMIT_NOFILE), flags);
 }
+
+int get_unused_fd_start_flags(unsigned start, unsigned flags)
+{
+	return __alloc_fd(current->files, start, rlimit(RLIMIT_NOFILE), flags);
+}
+EXPORT_SYMBOL(get_unused_fd_start_flags);
 
 int get_unused_fd_flags(unsigned flags)
 {

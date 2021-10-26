@@ -238,7 +238,7 @@ static void __up_console_sem(unsigned long ip)
 {
 	unsigned long flags;
 
-	mutex_release(&console_lock_dep_map, 1, ip);
+	mutex_release(&console_lock_dep_map, ip);
 
 	printk_safe_enter_irqsave(flags);
 	up(&console_sem);
@@ -443,17 +443,31 @@ static char __log_buf[__LOG_BUF_LEN] __aligned(LOG_ALIGN);
 static char *log_buf = __log_buf;
 static u32 log_buf_len = __LOG_BUF_LEN;
 
+/*
+ * We cannot access per-CPU data (e.g. per-CPU flush irq_work) before
+ * per_cpu_areas are initialised. This variable is set to true when
+ * it's safe to access per-CPU data.
+ */
+static bool __printk_percpu_data_ready __read_mostly;
+
+bool printk_percpu_data_ready(void)
+{
+	return __printk_percpu_data_ready;
+}
+
 /* Return log buffer address */
 char *log_buf_addr_get(void)
 {
 	return log_buf;
 }
+EXPORT_SYMBOL_GPL(log_buf_addr_get);
 
 /* Return log buffer size */
 u32 log_buf_len_get(void)
 {
 	return log_buf_len;
 }
+EXPORT_SYMBOL_GPL(log_buf_len_get);
 
 /* human readable text of the record */
 static char *log_text(const struct printk_log *msg)
@@ -1101,11 +1115,27 @@ static void __init log_buf_add_cpu(void)
 static inline void log_buf_add_cpu(void) {}
 #endif /* CONFIG_SMP */
 
+static void __init set_percpu_data_ready(void)
+{
+	printk_safe_init();
+	/* Make sure we set this flag only after printk_safe() init is done */
+	barrier();
+	__printk_percpu_data_ready = true;
+}
+
 void __init setup_log_buf(int early)
 {
 	unsigned long flags;
 	char *new_log_buf;
 	unsigned int free;
+
+	/*
+	 * Some archs call setup_log_buf() multiple times - first is very
+	 * early, e.g. from setup_arch(), and second - when percpu_areas
+	 * are initialised.
+	 */
+	if (!early)
+		set_percpu_data_ready();
 
 	if (log_buf != __log_buf)
 		return;
@@ -1624,20 +1654,20 @@ static int console_lock_spinning_disable_and_check(void)
 	raw_spin_unlock(&console_owner_lock);
 
 	if (!waiter) {
-		spin_release(&console_owner_dep_map, 1, _THIS_IP_);
+		spin_release(&console_owner_dep_map, _THIS_IP_);
 		return 0;
 	}
 
 	/* The waiter is now free to continue */
 	WRITE_ONCE(console_waiter, false);
 
-	spin_release(&console_owner_dep_map, 1, _THIS_IP_);
+	spin_release(&console_owner_dep_map, _THIS_IP_);
 
 	/*
 	 * Hand off console_lock to waiter. The waiter will perform
 	 * the up(). After this, the waiter is the console_lock owner.
 	 */
-	mutex_release(&console_lock_dep_map, 1, _THIS_IP_);
+	mutex_release(&console_lock_dep_map, _THIS_IP_);
 	return 1;
 }
 
@@ -1691,7 +1721,7 @@ static int console_trylock_spinning(void)
 	/* Owner will clear console_waiter on hand off */
 	while (READ_ONCE(console_waiter))
 		cpu_relax();
-	spin_release(&console_owner_dep_map, 1, _THIS_IP_);
+	spin_release(&console_owner_dep_map, _THIS_IP_);
 
 	printk_safe_exit_irqrestore(flags);
 	/*
@@ -2119,6 +2149,9 @@ static int __init console_setup(char *str)
 	char buf[sizeof(console_cmdline[0].name) + 4]; /* 4 for "ttyS" */
 	char *s, *options, *brl_options = NULL;
 	int idx;
+
+	if (str[0] == 0)
+		return 1;
 
 	if (_braille_console_setup(&str, &brl_options))
 		return 1;
@@ -2914,11 +2947,14 @@ static void wake_up_klogd_work_func(struct irq_work *irq_work)
 
 static DEFINE_PER_CPU(struct irq_work, wake_up_klogd_work) = {
 	.func = wake_up_klogd_work_func,
-	.flags = IRQ_WORK_LAZY,
+	.flags = ATOMIC_INIT(IRQ_WORK_LAZY),
 };
 
 void wake_up_klogd(void)
 {
+	if (!printk_percpu_data_ready())
+		return;
+
 	preempt_disable();
 	if (waitqueue_active(&log_wait)) {
 		this_cpu_or(printk_pending, PRINTK_PENDING_WAKEUP);
@@ -2929,6 +2965,9 @@ void wake_up_klogd(void)
 
 void defer_console_output(void)
 {
+	if (!printk_percpu_data_ready())
+		return;
+
 	preempt_disable();
 	__this_cpu_or(printk_pending, PRINTK_PENDING_OUTPUT);
 	irq_work_queue(this_cpu_ptr(&wake_up_klogd_work));

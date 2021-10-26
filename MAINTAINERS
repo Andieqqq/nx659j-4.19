@@ -3619,6 +3619,15 @@ M:	Miguel Ojeda <miguel.ojeda.sandonis@gmail.com>
 S:	Maintained
 F:	.clang-format
 
+CLANG/LLVM BUILD SUPPORT
+L:	clang-built-linux@googlegroups.com
+W:	https://clangbuiltlinux.github.io/
+B:	https://github.com/ClangBuiltLinux/linux/issues
+C:	irc://chat.freenode.net/clangbuiltlinux
+S:	Supported
+K:	\b(?i:clang|llvm)\b
+F:	Documentation/kbuild/llvm.rst
+
 CLEANCACHE API
 M:	Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
 L:	linux-kernel@vger.kernel.org
@@ -3898,6 +3907,7 @@ F:	crypto/
 F:	drivers/crypto/
 F:	include/crypto/
 F:	include/linux/crypto*
+F:	lib/crypto/
 
 CRYPTOGRAPHIC RANDOM NUMBER GENERATOR
 M:	Neil Horman <nhorman@tuxdriver.com>
@@ -6601,6 +6611,12 @@ F:	drivers/hid/
 F:	include/linux/hid*
 F:	include/uapi/linux/hid*
 
+HID PLAYSTATION DRIVER
+M:	Roderick Colenbrander <roderick.colenbrander@sony.com>
+L:	linux-input@vger.kernel.org
+S:	Supported
+F:	drivers/hid/hid-playstation.c
+
 HID SENSOR HUB DRIVERS
 M:	Jiri Kosina <jikos@kernel.org>
 M:	Jonathan Cameron <jic23@kernel.org>
@@ -8646,7 +8662,6 @@ F:	arch/*/include/asm/spinlock*.h
 F:	include/linux/rwlock*.h
 F:	include/linux/mutex*.h
 F:	include/linux/rwsem*.h
-F:	arch/*/include/asm/rwsem.h
 F:	include/linux/seqlock.h
 F:	lib/locking*.[ch]
 F:	kernel/locking/
@@ -9744,6 +9759,19 @@ T:	git git://git.linaro.org/people/ycmiao/pxa-linux.git
 S:	Maintained
 F:	arch/arm/boot/dts/mmp*
 F:	arch/arm/mach-mmp/
+
+MMU GATHER AND TLB INVALIDATION
+M:	Will Deacon <will.deacon@arm.com>
+M:	"Aneesh Kumar K.V" <aneesh.kumar@linux.vnet.ibm.com>
+M:	Andrew Morton <akpm@linux-foundation.org>
+M:	Nick Piggin <npiggin@gmail.com>
+M:	Peter Zijlstra <peterz@infradead.org>
+L:	linux-arch@vger.kernel.org
+L:	linux-mm@kvack.org
+S:	Maintained
+F:	arch/*/include/asm/tlb.h
+F:	include/asm-generic/tlb.h
+F:	mm/mmu_gather.c
 
 MN88472 MEDIA DRIVER
 M:	Antti Palosaari <crope@iki.fi>
@@ -15880,6 +15908,14 @@ M:	William Breathitt Gray <vilhelm.gray@gmail.com>
 L:	linux-gpio@vger.kernel.org
 S:	Maintained
 F:	drivers/gpio/gpio-ws16c48.c
+
+WIREGUARD SECURE NETWORK TUNNEL
+M:	Jason A. Donenfeld <Jason@zx2c4.com>
+S:	Maintained
+F:	drivers/net/wireguard/
+F:	tools/testing/selftests/wireguard/
+L:	wireguard@lists.zx2c4.com
+L:	netdev@vger.kernel.org
 
 WISTRON LAPTOP BUTTON DRIVER
 M:	Miloslav Trmac <mitr@volny.cz>

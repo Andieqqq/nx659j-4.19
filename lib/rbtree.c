@@ -456,10 +456,13 @@ EXPORT_SYMBOL(rb_insert_color);
 void rb_erase(struct rb_node *node, struct rb_root *root)
 {
 	struct rb_node *rebalance;
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	rebalance = __rb_erase_augmented(node, root,
 					 NULL, &dummy_callbacks);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 	if (rebalance)
 		____rb_erase_color(rebalance, root, dummy_rotate);
+pr_info("DEBUG: %s:%d \n", __func__, __LINE__);
 }
 EXPORT_SYMBOL(rb_erase);
 

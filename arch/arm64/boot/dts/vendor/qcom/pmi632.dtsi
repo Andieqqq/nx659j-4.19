@@ -6,8 +6,8 @@
 	qcom,pmi632@2 {
 		compatible = "qcom,spmi-pmic";
 		reg = <0x2 0x0>;
-		#address-cells = <1>;
-		#size-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
 
 		pmi632_revid: qcom,revid@100 {
 			compatible = "qcom,qpnp-revid";
@@ -20,7 +20,7 @@
 		};
 
 		pmi632_vadc: vadc@3100 {
-			compatible = "qcom,spmi-adc5";
+			compatible = "qcom,spmi-adc5-lite";
 			reg = <0x3100 0x100>, <0x3700 0x100>;
 			reg-names = "adc5-usr-base", "adc5-cal-base";
 			#address-cells = <1>;
@@ -110,6 +110,12 @@
 				label = "bat_id";
 				qcom,ratiometric;
 				qcom,hw-settle-time = <200>;
+				qcom,pre-scaling = <1 1>;
+			};
+
+			i_parallel {
+				reg = <ADC_PARALLEL_ISENSE>;
+				label = "i_parallel";
 				qcom,pre-scaling = <1 1>;
 			};
 
@@ -392,8 +398,8 @@
 	pmi632_3: qcom,pmi632@3 {
 		compatible ="qcom,spmi-pmic";
 		reg = <0x3 0x0>;
-		#address-cells = <1>;
-		#size-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
 
 		pmi632_vib: qcom,vibrator@5700 {
 			compatible = "qcom,qpnp-vibrator-ldo";

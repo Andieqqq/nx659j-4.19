@@ -149,6 +149,7 @@
 static int psi_bug __read_mostly;
 
 DEFINE_STATIC_KEY_FALSE(psi_disabled);
+DEFINE_STATIC_KEY_TRUE(psi_cgroups_enabled);
 
 #ifdef CONFIG_PSI_DEFAULT_DISABLED
 static bool psi_enable;
@@ -180,6 +181,13 @@ static DEFINE_PER_CPU(struct psi_group_cpu, system_group_pcpu);
 static struct psi_group psi_system = {
 	.pcpu = &system_group_pcpu,
 };
+
+struct psi_event_info {
+	u64 last_event_time;
+	u64 last_event_growth;
+};
+/* ioctl cmd to get info of  last psi trigger event*/
+#define GET_LAST_PSI_EVENT_INFO _IOR('p', 1, struct psi_event_info)
 
 static void psi_avgs_work(struct work_struct *work);
 
@@ -213,6 +221,9 @@ void __init psi_init(void)
 		return;
 	}
 
+	if (!cgroup_psi_enabled())
+		static_branch_disable(&psi_cgroups_enabled);
+
 	psi_period = jiffies_to_nsecs(PSI_FREQ);
 	group_init(&psi_system);
 }
@@ -229,7 +240,7 @@ static bool test_state(unsigned int *tasks, enum psi_states state)
 	case PSI_MEM_FULL:
 		return tasks[NR_MEMSTALL] && !tasks[NR_RUNNING];
 	case PSI_CPU_SOME:
-		return tasks[NR_RUNNING] > 1;
+		return tasks[NR_RUNNING] > tasks[NR_ONCPU];
 	case PSI_NONIDLE:
 		return tasks[NR_IOWAIT] || tasks[NR_MEMSTALL] ||
 			tasks[NR_RUNNING];
@@ -575,6 +586,8 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 
 		trace_psi_event(t->state, t->threshold);
 
+		t->last_event_time = now;
+		t->last_event_growth = growth;
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
 			if (!strcmp(t->comm, ULMK_MAGIC))
@@ -582,7 +595,6 @@ static u64 update_triggers(struct psi_group *group, u64 now)
 					  nsecs_to_jiffies(2 * t->win.size));
 			wake_up_interruptible(&t->event_wait);
 		}
-		t->last_event_time = now;
 	}
 
 	trace_event_helper(group);
@@ -783,13 +795,14 @@ static void record_times(struct psi_group_cpu *groupc, int cpu,
 		groupc->times[PSI_NONIDLE] += delta;
 }
 
-static u32 psi_group_change(struct psi_group *group, int cpu,
-			    unsigned int clear, unsigned int set)
+static void psi_group_change(struct psi_group *group, int cpu,
+			     unsigned int clear, unsigned int set,
+			     bool wake_clock)
 {
 	struct psi_group_cpu *groupc;
+	u32 state_mask = 0;
 	unsigned int t, m;
 	enum psi_states s;
-	u32 state_mask = 0;
 
 	groupc = per_cpu_ptr(group->pcpu, cpu);
 
@@ -809,10 +822,10 @@ static u32 psi_group_change(struct psi_group *group, int cpu,
 		if (!(m & (1 << t)))
 			continue;
 		if (groupc->tasks[t] == 0 && !psi_bug) {
-			printk_deferred(KERN_ERR "psi: task underflow! cpu=%d t=%d tasks=[%u %u %u] clear=%x set=%x\n",
+			printk_deferred(KERN_ERR "psi: task underflow! cpu=%d t=%d tasks=[%u %u %u %u] clear=%x set=%x\n",
 					cpu, t, groupc->tasks[0],
 					groupc->tasks[1], groupc->tasks[2],
-					clear, set);
+					groupc->tasks[3], clear, set);
 			psi_bug = 1;
 		}
 		groupc->tasks[t]--;
@@ -831,31 +844,50 @@ static u32 psi_group_change(struct psi_group *group, int cpu,
 
 	write_seqcount_end(&groupc->seq);
 
-	return state_mask;
+	if (state_mask & group->poll_states)
+		psi_schedule_poll_work(group, 1);
+
+	if (wake_clock && !delayed_work_pending(&group->avgs_work))
+		schedule_delayed_work(&group->avgs_work, PSI_FREQ);
 }
 
 static struct psi_group *iterate_groups(struct task_struct *task, void **iter)
 {
+	if (*iter == &psi_system)
+		return NULL;
+
 #ifdef CONFIG_CGROUPS
-	struct cgroup *cgroup = NULL;
+	if (static_branch_likely(&psi_cgroups_enabled)) {
+		struct cgroup *cgroup = NULL;
 
-	if (!*iter)
-		cgroup = task->cgroups->dfl_cgrp;
-	else if (*iter == &psi_system)
-		return NULL;
-	else
-		cgroup = cgroup_parent(*iter);
+		if (!*iter)
+			cgroup = task->cgroups->dfl_cgrp;
+		else
+			cgroup = cgroup_parent(*iter);
 
-	if (cgroup && cgroup_parent(cgroup)) {
-		*iter = cgroup;
-		return cgroup_psi(cgroup);
+		if (cgroup && cgroup_parent(cgroup)) {
+			*iter = cgroup;
+			return cgroup_psi(cgroup);
+		}
 	}
-#else
-	if (*iter)
-		return NULL;
 #endif
 	*iter = &psi_system;
 	return &psi_system;
+}
+
+static void psi_flags_change(struct task_struct *task, int clear, int set)
+{
+	if (((task->psi_flags & set) ||
+	     (task->psi_flags & clear) != clear) &&
+	    !psi_bug) {
+		printk_deferred(KERN_ERR "psi: inconsistent task state! task=%d:%s cpu=%d psi_flags=%x clear=%x set=%x\n",
+				task->pid, task->comm, task_cpu(task),
+				task->psi_flags, clear, set);
+		psi_bug = 1;
+	}
+
+	task->psi_flags &= ~clear;
+	task->psi_flags |= set;
 }
 
 void psi_task_change(struct task_struct *task, int clear, int set)
@@ -868,17 +900,7 @@ void psi_task_change(struct task_struct *task, int clear, int set)
 	if (!task->pid)
 		return;
 
-	if (((task->psi_flags & set) ||
-	     (task->psi_flags & clear) != clear) &&
-	    !psi_bug) {
-		printk_deferred(KERN_ERR "psi: inconsistent task state! task=%d:%s cpu=%d psi_flags=%x clear=%x set=%x\n",
-				task->pid, task->comm, cpu,
-				task->psi_flags, clear, set);
-		psi_bug = 1;
-	}
-
-	task->psi_flags &= ~clear;
-	task->psi_flags |= set;
+	psi_flags_change(task, clear, set);
 
 	/*
 	 * Periodic aggregation shuts off if there is a period of no
@@ -891,14 +913,51 @@ void psi_task_change(struct task_struct *task, int clear, int set)
 		     wq_worker_last_func(task) == psi_avgs_work))
 		wake_clock = false;
 
-	while ((group = iterate_groups(task, &iter))) {
-		u32 state_mask = psi_group_change(group, cpu, clear, set);
+	while ((group = iterate_groups(task, &iter)))
+		psi_group_change(group, cpu, clear, set, wake_clock);
+}
 
-		if (state_mask & group->poll_states)
-			psi_schedule_poll_work(group, 1);
+void psi_task_switch(struct task_struct *prev, struct task_struct *next,
+		     bool sleep)
+{
+	struct psi_group *group, *common = NULL;
+	int cpu = task_cpu(prev);
+	void *iter;
 
-		if (wake_clock && !delayed_work_pending(&group->avgs_work))
-			schedule_delayed_work(&group->avgs_work, PSI_FREQ);
+	if (next->pid) {
+		psi_flags_change(next, 0, TSK_ONCPU);
+		/*
+		 * When moving state between tasks, the group that
+		 * contains them both does not change: we can stop
+		 * updating the tree once we reach the first common
+		 * ancestor. Iterate @next's ancestors until we
+		 * encounter @prev's state.
+		 */
+		iter = NULL;
+		while ((group = iterate_groups(next, &iter))) {
+			if (per_cpu_ptr(group->pcpu, cpu)->tasks[NR_ONCPU]) {
+				common = group;
+				break;
+			}
+
+			psi_group_change(group, cpu, 0, TSK_ONCPU, true);
+		}
+	}
+
+	/*
+	 * If this is a voluntary sleep, dequeue will have taken care
+	 * of the outgoing TSK_ONCPU alongside TSK_RUNNING already. We
+	 * only need to deal with it during preemption.
+	 */
+	if (sleep)
+		return;
+
+	if (prev->pid) {
+		psi_flags_change(prev, TSK_ONCPU, 0);
+
+		iter = NULL;
+		while ((group = iterate_groups(prev, &iter)) && group != common)
+			psi_group_change(group, cpu, TSK_ONCPU, 0, true);
 	}
 }
 
@@ -932,17 +991,17 @@ void psi_memstall_enter(unsigned long *flags)
 	if (static_branch_likely(&psi_disabled))
 		return;
 
-	*flags = current->flags & PF_MEMSTALL;
+	*flags = current->in_memstall;
 	if (*flags)
 		return;
 	/*
-	 * PF_MEMSTALL setting & accounting needs to be atomic wrt
+	 * in_memstall setting & accounting needs to be atomic wrt
 	 * changes to the task's scheduling state, otherwise we can
 	 * race with CPU migration.
 	 */
 	rq = this_rq_lock_irq(&rf);
 
-	current->flags |= PF_MEMSTALL;
+	current->in_memstall = 1;
 	psi_task_change(current, 0, TSK_MEMSTALL);
 
 	rq_unlock_irq(rq, &rf);
@@ -965,13 +1024,13 @@ void psi_memstall_leave(unsigned long *flags)
 	if (*flags)
 		return;
 	/*
-	 * PF_MEMSTALL clearing & accounting needs to be atomic wrt
+	 * in_memstall clearing & accounting needs to be atomic wrt
 	 * changes to the task's scheduling state, otherwise we could
 	 * race with CPU migration.
 	 */
 	rq = this_rq_lock_irq(&rf);
 
-	current->flags &= ~PF_MEMSTALL;
+	current->in_memstall = 0;
 	psi_task_change(current, TSK_MEMSTALL, 0);
 
 	rq_unlock_irq(rq, &rf);
@@ -1030,12 +1089,14 @@ void cgroup_move_task(struct task_struct *task, struct css_set *to)
 
 	rq = task_rq_lock(task, &rf);
 
-	if (task_on_rq_queued(task))
+	if (task_on_rq_queued(task)) {
 		task_flags = TSK_RUNNING;
-	else if (task->in_iowait)
+		if (task_current(rq, task))
+			task_flags |= TSK_ONCPU;
+	} else if (task->in_iowait)
 		task_flags = TSK_IOWAIT;
 
-	if (task->flags & PF_MEMSTALL)
+	if (task->in_memstall)
 		task_flags |= TSK_MEMSTALL;
 
 	if (task_flags)
@@ -1366,6 +1427,43 @@ static __poll_t psi_fop_poll(struct file *file, poll_table *wait)
 	return psi_trigger_poll(&seq->private, file, wait);
 }
 
+static long psi_fop_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct seq_file *seq = file->private_data;
+	struct psi_trigger *t;
+	unsigned int ret;
+	void __user *ubuf = (void __user *)arg;
+
+	if (static_branch_likely(&psi_disabled))
+		return -EOPNOTSUPP;
+
+	switch (cmd) {
+	case GET_LAST_PSI_EVENT_INFO: {
+		struct psi_event_info last_event_info;
+		rcu_read_lock();
+		t = rcu_dereference(seq->private);
+		if (t) {
+			last_event_info.last_event_time = t->last_event_time;
+			last_event_info.last_event_growth = t->last_event_growth;
+			ret = 0;
+		} else {
+			ret = -EFAULT;
+		}
+		rcu_read_unlock();
+		if (!ret) {
+			if (copy_to_user(ubuf, &last_event_info, sizeof(last_event_info))) {
+				ret = -EFAULT;
+			}
+		}
+		break;
+	}
+	default:
+		ret = -EINVAL;
+		break;
+	}
+	return ret;
+}
+
 static int psi_fop_release(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq = file->private_data;
@@ -1381,6 +1479,8 @@ static const struct file_operations psi_io_fops = {
 	.write          = psi_io_write,
 	.poll           = psi_fop_poll,
 	.release        = psi_fop_release,
+	.unlocked_ioctl = psi_fop_ioctl,
+	.compat_ioctl   = psi_fop_ioctl,
 };
 
 static const struct file_operations psi_memory_fops = {
@@ -1390,6 +1490,8 @@ static const struct file_operations psi_memory_fops = {
 	.write          = psi_memory_write,
 	.poll           = psi_fop_poll,
 	.release        = psi_fop_release,
+	.unlocked_ioctl = psi_fop_ioctl,
+	.compat_ioctl   = psi_fop_ioctl,
 };
 
 static const struct file_operations psi_cpu_fops = {
@@ -1399,14 +1501,18 @@ static const struct file_operations psi_cpu_fops = {
 	.write          = psi_cpu_write,
 	.poll           = psi_fop_poll,
 	.release        = psi_fop_release,
+	.unlocked_ioctl = psi_fop_ioctl,
+	.compat_ioctl   = psi_fop_ioctl,
 };
 
 static int __init psi_proc_init(void)
 {
-	proc_mkdir("pressure", NULL);
-	proc_create("pressure/io", 0, NULL, &psi_io_fops);
-	proc_create("pressure/memory", 0, NULL, &psi_memory_fops);
-	proc_create("pressure/cpu", 0, NULL, &psi_cpu_fops);
+	if (psi_enable) {
+		proc_mkdir("pressure", NULL);
+		proc_create("pressure/io", 0, NULL, &psi_io_fops);
+		proc_create("pressure/memory", 0, NULL, &psi_memory_fops);
+		proc_create("pressure/cpu", 0, NULL, &psi_cpu_fops);
+	}
 	return 0;
 }
 module_init(psi_proc_init);

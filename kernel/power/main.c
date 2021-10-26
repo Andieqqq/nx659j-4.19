@@ -16,8 +16,16 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/suspend.h>
+#include <linux/syscalls.h>
+#include <linux/pm_runtime.h>
 
 #include "power.h"
+
+extern u64 sum_wakeup_time;
+extern u64 sum_wakeup_times;
+extern u64 last_wake_time;
+extern void exclude_screen_on_time(void);
+extern void reset_all_statistics(void);
 
 #ifdef CONFIG_PM_SLEEP
 
@@ -50,6 +58,19 @@ void unlock_system_sleep(void)
 	mutex_unlock(&system_transition_mutex);
 }
 EXPORT_SYMBOL_GPL(unlock_system_sleep);
+
+void ksys_sync_helper(void)
+{
+	ktime_t start;
+	long elapsed_msecs;
+
+	start = ktime_get();
+	ksys_sync();
+	elapsed_msecs = ktime_to_ms(ktime_sub(ktime_get(), start));
+	pr_info("Filesystems sync: %ld.%03ld seconds\n",
+		elapsed_msecs / MSEC_PER_SEC, elapsed_msecs % MSEC_PER_SEC);
+}
+EXPORT_SYMBOL_GPL(ksys_sync_helper);
 
 /* Routines for PM-transition notifications */
 
@@ -177,6 +198,38 @@ static ssize_t mem_sleep_store(struct kobject *kobj, struct kobj_attribute *attr
 }
 
 power_attr(mem_sleep);
+
+/*
+ * sync_on_suspend: invoke ksys_sync_helper() before suspend.
+ *
+ * show() returns whether ksys_sync_helper() is invoked before suspend.
+ * store() accepts 0 or 1.  0 disables ksys_sync_helper() and 1 enables it.
+ */
+bool sync_on_suspend_enabled = !IS_ENABLED(CONFIG_SUSPEND_SKIP_SYNC);
+
+static ssize_t sync_on_suspend_show(struct kobject *kobj,
+				   struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", sync_on_suspend_enabled);
+}
+
+static ssize_t sync_on_suspend_store(struct kobject *kobj,
+				    struct kobj_attribute *attr,
+				    const char *buf, size_t n)
+{
+	unsigned long val;
+
+	if (kstrtoul(buf, 10, &val))
+		return -EINVAL;
+
+	if (val > 1)
+		return -EINVAL;
+
+	sync_on_suspend_enabled = !!val;
+	return n;
+}
+
+power_attr(sync_on_suspend);
 #endif /* CONFIG_SUSPEND */
 
 #ifdef CONFIG_PM_SLEEP_DEBUG
@@ -535,6 +588,7 @@ static inline void pm_print_times_init(void) {}
 #endif /* CONFIG_PM_SLEEP_DEBUG */
 
 struct kobject *power_kobj;
+EXPORT_SYMBOL_GPL(power_kobj);
 
 /**
  * state - control system sleep states.
@@ -627,6 +681,70 @@ static ssize_t state_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 
 power_attr(state);
+
+static ssize_t sum_wakeup_time_show(struct kobject *kobj, struct kobj_attribute *attr,
+			  char *buf)
+{
+	return snprintf(buf, 20, "%llu\n", sum_wakeup_time/1000);
+}
+
+static ssize_t sum_wakeup_time_store(struct kobject *kobj, struct kobj_attribute *attr,
+			   const char *buf, size_t n)
+{
+	int error;
+	return error ? error : n;
+}
+
+power_attr_tmp(sum_wakeup_time);
+
+static ssize_t last_wake_time_show(struct kobject *kobj, struct kobj_attribute *attr,
+			  char *buf)
+{
+	return snprintf(buf, 20, "%llu\n", last_wake_time);
+}
+
+static ssize_t last_wake_time_store(struct kobject *kobj, struct kobj_attribute *attr,
+			   const char *buf, size_t n)
+{
+	int error;
+	return error ? error : n;
+}
+
+power_attr_tmp(last_wake_time);
+
+static ssize_t wake_times_show(struct kobject *kobj, struct kobj_attribute *attr,
+			  char *buf)
+{
+	return snprintf(buf, 20, "%llu\n", sum_wakeup_times);
+}
+
+static ssize_t wake_times_store(struct kobject *kobj, struct kobj_attribute *attr,
+			   const char *buf, size_t n)
+{
+	int error;
+	return error ? error : n;
+}
+
+power_attr_tmp(wake_times);
+
+static ssize_t screen_off_flag_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return 0;
+}
+
+static ssize_t screen_off_flag_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t n)
+{
+	int val = -1;
+
+	val = simple_strtol(buf, NULL, 10);
+	if (val == 111)
+		exclude_screen_on_time();
+	else if (val == 222)
+		reset_all_statistics();
+	return n;
+}
+
+power_attr_tmp(screen_off_flag);
 
 #ifdef CONFIG_PM_SLEEP
 /*
@@ -853,6 +971,7 @@ static struct attribute * g[] = {
 	&wakeup_count_attr.attr,
 #ifdef CONFIG_SUSPEND
 	&mem_sleep_attr.attr,
+	&sync_on_suspend_attr.attr,
 #endif
 #ifdef CONFIG_PM_AUTOSLEEP
 	&autosleep_attr.attr,
@@ -871,6 +990,10 @@ static struct attribute * g[] = {
 #ifdef CONFIG_FREEZER
 	&pm_freeze_timeout_attr.attr,
 #endif
+	&wake_times_attr.attr,
+	&last_wake_time_attr.attr,
+	&sum_wakeup_time_attr.attr,
+	&screen_off_flag_attr.attr,
 	NULL,
 };
 

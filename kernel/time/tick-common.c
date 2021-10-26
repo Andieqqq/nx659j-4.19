@@ -15,6 +15,7 @@
 #include <linux/err.h>
 #include <linux/hrtimer.h>
 #include <linux/interrupt.h>
+#include <linux/nmi.h>
 #include <linux/percpu.h>
 #include <linux/profile.h>
 #include <linux/sched.h>
@@ -337,7 +338,7 @@ out_bc:
 	/*
 	 * Can the new device be used as a broadcast device ?
 	 */
-	tick_install_broadcast_device(newdev);
+	tick_install_broadcast_device(newdev, cpu);
 }
 
 /**
@@ -520,6 +521,7 @@ void tick_unfreeze(void)
 		trace_suspend_resume(TPS("timekeeping_freeze"),
 				     smp_processor_id(), false);
 	} else {
+		touch_softlockup_watchdog();
 		tick_resume_local();
 	}
 
